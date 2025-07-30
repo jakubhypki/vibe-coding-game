@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Counter-Strike 1.6 - Web Edition</title>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <div id="gameContainer">
         <div id="gameMenu" class="screen active">
@@ -16,7 +18,7 @@
                 <button id="instructions">Instructions</button>
             </div>
         </div>
-        
+
         <div id="multiplayerMenu" class="screen">
             <h2>Multiplayer</h2>
             <div class="multiplayer-form">
@@ -29,7 +31,7 @@
             </div>
             <div id="connectionStatus" class="status-message"></div>
         </div>
-        
+
         <div id="instructionsScreen" class="screen">
             <h2>Instructions</h2>
             <div class="instructions-content">
@@ -41,7 +43,7 @@
             </div>
             <button id="backToMenu">Back to Menu</button>
         </div>
-        
+
         <div id="gameScreen" class="screen">
             <canvas id="gameCanvas" width="800" height="600"></canvas>
             <div id="gameUI">
@@ -60,13 +62,13 @@
                     <span>Score: </span>
                     <span id="scoreText">0</span>
                 </div>
-                <div id="multiplayerInfo" style="display: none;">
+                <div id="multiplayerInfo">
                     <div id="playerCount">Players: <span id="playerCountText">1</span></div>
                     <div id="roomInfo">Room: <span id="roomIdText">-</span></div>
                 </div>
             </div>
         </div>
-        
+
         <div id="gameOverScreen" class="screen">
             <h2>Game Over</h2>
             <div id="finalScore">Final Score: <span id="finalScoreText">0</span></div>
@@ -76,8 +78,9 @@
             </div>
         </div>
     </div>
-    
+
     <script src="/socket.io/socket.io.js"></script>
     <script src="game.js"></script>
 </body>
+
 </html>
