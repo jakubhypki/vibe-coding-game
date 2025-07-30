@@ -196,6 +196,11 @@ class Player {
         this.alive = true;
         this.weapon.ammo = this.weapon.maxAmmo;
 
+        // Find a safe respawn position
+        const safeSpawn = findSafeSpawnPosition(this.x, this.y, 400);
+        this.x = safeSpawn.x;
+        this.y = safeSpawn.y;
+
         if (Game.isMultiplayer && Game.socket) {
             Game.socket.emit('respawn');
         }

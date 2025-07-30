@@ -165,13 +165,45 @@ class TextureManager {
         ctx.restore();
     }
 
-    drawTiledTexture(ctx, textureName, x, y, width, height) {
+    drawTiledTexture(ctx, textureName, x, y, width, height, worldX = null, worldY = null) {
         const texture = this.getTexture(textureName);
-        const pattern = ctx.createPattern(texture, 'repeat');
         
         ctx.save();
-        ctx.fillStyle = pattern;
-        ctx.fillRect(x, y, width, height);
+        
+        // If world coordinates are provided, use them for fixed positioning
+        if (worldX !== null && worldY !== null) {
+            // Create pattern with fixed world positioning
+            const pattern = ctx.createPattern(texture, 'repeat');
+            ctx.fillStyle = pattern;
+            
+            // Calculate the offset to align pattern with world coordinates
+            const offsetX = worldX % texture.width;
+            const offsetY = worldY % texture.height;
+            
+            // Set up clipping region for the floor area
+            ctx.beginPath();
+            ctx.rect(x, y, width, height);
+            ctx.clip();
+            
+            // Draw pattern starting from world-aligned position
+            const startX = x - offsetX;
+            const startY = y - offsetY;
+            const endX = x + width + texture.width;
+            const endY = y + height + texture.height;
+            
+            // Fill the area with properly aligned pattern
+            for (let px = startX; px < endX; px += texture.width) {
+                for (let py = startY; py < endY; py += texture.height) {
+                    ctx.drawImage(texture, px, py);
+                }
+            }
+        } else {
+            // Standard tiled texture (moves with camera)
+            const pattern = ctx.createPattern(texture, 'repeat');
+            ctx.fillStyle = pattern;
+            ctx.fillRect(x, y, width, height);
+        }
+        
         ctx.restore();
     }
 }

@@ -22,8 +22,10 @@ function drawInfiniteWorld(ctx) {
     floors.forEach(floor => {
         if (isOnScreen(floor.x, floor.y, floor.width, floor.height)) {
             if (window.TextureManager) {
-                window.TextureManager.drawTiledTexture(ctx, 'floor_tiles', 
-                    floor.x - Game.camera.x, floor.y - Game.camera.y, floor.width, floor.height);
+                // Use fixed positioning for floor textures so they don't move with camera
+                window.TextureManager.drawTiledTexture(ctx, 'floor_tiles',
+                    floor.x - Game.camera.x, floor.y - Game.camera.y, floor.width, floor.height,
+                    floor.x, floor.y); // Pass world coordinates for fixed positioning
             } else {
                 ctx.fillStyle = '#696969';
                 ctx.fillRect(floor.x - Game.camera.x, floor.y - Game.camera.y, floor.width, floor.height);
