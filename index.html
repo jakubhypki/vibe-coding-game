@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Counter-Strike 1.6 - Web Edition</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="gameMenu" class="screen active">
+            <h1>Counter-Strike 1.6</h1>
+            <div class="menu-buttons">
+                <button id="startSinglePlayer">Single Player</button>
+                <button id="startMultiplayer">Multiplayer</button>
+                <button id="instructions">Instructions</button>
+            </div>
+        </div>
+        
+        <div id="multiplayerMenu" class="screen">
+            <h2>Multiplayer</h2>
+            <div class="multiplayer-form">
+                <input type="text" id="playerName" placeholder="Enter your name" maxlength="20">
+                <input type="text" id="roomId" placeholder="Room ID (leave empty for random)" maxlength="20">
+                <div class="menu-buttons">
+                    <button id="joinGame">Join Game</button>
+                    <button id="backToMainMenu2">Back to Menu</button>
+                </div>
+            </div>
+            <div id="connectionStatus" class="status-message"></div>
+        </div>
+        
+        <div id="instructionsScreen" class="screen">
+            <h2>Instructions</h2>
+            <div class="instructions-content">
+                <p><strong>Movement:</strong> WASD keys</p>
+                <p><strong>Aim:</strong> Mouse</p>
+                <p><strong>Shoot:</strong> Left Click</p>
+                <p><strong>Reload:</strong> R key</p>
+                <p><strong>Pause:</strong> ESC key</p>
+            </div>
+            <button id="backToMenu">Back to Menu</button>
+        </div>
+        
+        <div id="gameScreen" class="screen">
+            <canvas id="gameCanvas" width="800" height="600"></canvas>
+            <div id="gameUI">
+                <div id="healthBar">
+                    <span>Health: </span>
+                    <div class="bar">
+                        <div id="healthFill" class="bar-fill"></div>
+                    </div>
+                    <span id="healthText">100</span>
+                </div>
+                <div id="ammoCounter">
+                    <span>Ammo: </span>
+                    <span id="ammoText">30/90</span>
+                </div>
+                <div id="scoreDisplay">
+                    <span>Score: </span>
+                    <span id="scoreText">0</span>
+                </div>
+                <div id="multiplayerInfo" style="display: none;">
+                    <div id="playerCount">Players: <span id="playerCountText">1</span></div>
+                    <div id="roomInfo">Room: <span id="roomIdText">-</span></div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="gameOverScreen" class="screen">
+            <h2>Game Over</h2>
+            <div id="finalScore">Final Score: <span id="finalScoreText">0</span></div>
+            <div class="menu-buttons">
+                <button id="playAgain">Play Again</button>
+                <button id="backToMainMenu">Main Menu</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="game.js"></script>
+</body>
+</html>
