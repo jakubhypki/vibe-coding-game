@@ -15,6 +15,10 @@ class AudioManager {
         this.musicEnabled = true;
         this.sfxEnabled = true;
         
+        // Footstep looping system
+        this.footstepAudio = null;
+        this.isPlayingFootsteps = false;
+        
         // Initialize audio context for better browser compatibility
         this.audioContext = null;
         this.initAudioContext();
@@ -37,23 +41,19 @@ class AudioManager {
     }
     
     loadDefaultSounds() {
-        // Define sound effects with fallback to generated audio
+        // Define sound effects using actual audio files
         const soundEffects = {
-            'shoot_ak47': {
-                url: 'audio/weapons/ak47_shot.mp3',
+            'gunshot': {
+                url: 'audio/gunshot.mp3',
                 fallback: () => this.generateGunshot(0.3, 150, 50)
             },
-            'shoot_m4a1': {
-                url: 'audio/weapons/m4a1_shot.mp3',
-                fallback: () => this.generateGunshot(0.25, 180, 60)
+            'footstep': {
+                url: 'audio/footstep.wav',
+                fallback: () => this.generateFootstep()
             },
             'reload': {
                 url: 'audio/weapons/reload.mp3',
                 fallback: () => this.generateReload()
-            },
-            'footstep': {
-                url: 'audio/player/footstep.mp3',
-                fallback: () => this.generateFootstep()
             },
             'hit_player': {
                 url: 'audio/player/hit.mp3',
@@ -88,27 +88,22 @@ class AudioManager {
     }
     
     loadDefaultMusic() {
-        // Define background music tracks
+        // Define background music tracks using actual audio files
         const musicTracks = {
-            'menu_theme': {
-                url: 'audio/music/menu_theme.mp3',
+            'main_theme': {
+                url: 'audio/main_theme.mp3',
                 loop: true,
                 fallback: () => this.generateAmbientMusic(220, 'menu')
             },
-            'round_music': {
-                url: 'audio/music/round_music.mp3',
+            'gameplay': {
+                url: 'audio/gameplay.mp3',
                 loop: true,
                 fallback: () => this.generateAmbientMusic(440, 'action')
             },
-            'victory_music': {
-                url: 'audio/music/victory.mp3',
-                loop: false,
+            'stats': {
+                url: 'audio/stats.mp3',
+                loop: true,
                 fallback: () => this.generateVictoryMusic()
-            },
-            'defeat_music': {
-                url: 'audio/music/defeat.mp3',
-                loop: false,
-                fallback: () => this.generateDefeatMusic()
             }
         };
         
@@ -298,6 +293,44 @@ class AudioManager {
     updateAllVolumes() {
         if (this.currentMusic) {
             this.currentMusic.volume = this.isMuted ? 0 : this.masterVolume * this.musicVolume;
+        }
+        if (this.footstepAudio) {
+            this.footstepAudio.volume = this.isMuted ? 0 : this.masterVolume * this.sfxVolume * 0.3;
+        }
+    }
+    
+    startFootsteps() {
+        if (!this.sfxEnabled || this.isMuted || this.isPlayingFootsteps) return;
+        
+        const footstepSound = this.sounds.get('footstep');
+        if (!footstepSound) return;
+        
+        try {
+            // Clone the footstep audio for looping
+            this.footstepAudio = footstepSound.cloneNode();
+            this.footstepAudio.loop = true;
+            this.footstepAudio.volume = this.masterVolume * this.sfxVolume * 0.3; // Lower volume for footsteps
+            
+            this.footstepAudio.play().then(() => {
+                this.isPlayingFootsteps = true;
+            }).catch(e => {
+                console.warn('Failed to play footsteps:', e);
+            });
+        } catch (e) {
+            console.warn('Error starting footsteps:', e);
+        }
+    }
+    
+    stopFootsteps() {
+        if (!this.isPlayingFootsteps || !this.footstepAudio) return;
+        
+        try {
+            this.footstepAudio.pause();
+            this.footstepAudio.currentTime = 0;
+            this.footstepAudio = null;
+            this.isPlayingFootsteps = false;
+        } catch (e) {
+            console.warn('Error stopping footsteps:', e);
         }
     }
     

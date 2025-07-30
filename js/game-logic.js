@@ -87,6 +87,12 @@ function update(deltaTime) {
         Game.state = 'gameOver';
         const finalScoreEl = document.getElementById('finalScoreText');
         if (finalScoreEl) finalScoreEl.textContent = Game.score;
+        
+        // Play stats music when game ends
+        if (Game.audioManager) {
+            Game.audioManager.playMusic('stats');
+        }
+        
         showScreen('gameOverScreen');
     }
 }
@@ -237,10 +243,10 @@ function startSinglePlayerGame() {
     Game.level = 1;
     Game.enemiesKilled = 0;
     
-    // Play round start sound and music
+    // Play round start sound and gameplay music
     if (Game.audioManager) {
         Game.audioManager.playSound('round_start');
-        Game.audioManager.playMusic('round_music');
+        Game.audioManager.playMusic('gameplay');
     }
     
     // Reset world generation
@@ -305,10 +311,10 @@ function startMultiplayerGame() {
     Game.gameMode = gameMode;
     Game.score = 0;
     
-    // Play round start sound and music
+    // Play round start sound and gameplay music
     if (Game.audioManager) {
         Game.audioManager.playSound('round_start');
-        Game.audioManager.playMusic('round_music');
+        Game.audioManager.playMusic('gameplay');
     }
     
     // Initialize local player only if not spectator
@@ -360,9 +366,9 @@ function showMenu() {
     Game.isMultiplayer = false;
     Game.isSpectator = false;
     
-    // Play menu music
+    // Play main theme music
     if (Game.audioManager) {
-        Game.audioManager.playMusic('menu_theme');
+        Game.audioManager.playMusic('main_theme');
     }
     
     showScreen('gameMenu');

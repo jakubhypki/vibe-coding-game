@@ -115,6 +115,18 @@ class Player {
             dy *= 0.707;
         }
         
+        // Check if player is moving
+        const isMoving = dx !== 0 || dy !== 0;
+        
+        // Handle footstep audio
+        if (Game.audioManager) {
+            if (isMoving) {
+                Game.audioManager.startFootsteps();
+            } else {
+                Game.audioManager.stopFootsteps();
+            }
+        }
+        
         // Apply movement with collision detection
         const moveDistance = this.speed * deltaTime;
         const newX = this.x + dx * moveDistance;
@@ -203,6 +215,11 @@ class Player {
         
         this.weapon.ammo--;
         this.weapon.lastShot = Date.now();
+        
+        // Play gunshot sound
+        if (Game.audioManager) {
+            Game.audioManager.playSound('gunshot', 1.0);
+        }
         
         const bulletX = this.x + Math.cos(this.angle) * 25;
         const bulletY = this.y + Math.sin(this.angle) * 25;
