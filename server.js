@@ -22,44 +22,372 @@ const gameRooms = new Map();
 const players = new Map();
 
 class GameRoom {
-    constructor(id) {
+    constructor(id, gameMode = 'deathmatch') {
         this.id = id;
         this.players = new Map();
+        this.spectators = new Map();
         this.bullets = [];
-        this.gameState = 'waiting'; // waiting, playing, finished
-        this.maxPlayers = 8;
+        this.gameState = 'waiting'; // waiting, playing, finished, roundEnd
+        this.gameMode = gameMode; // deathmatch, teamdeathmatch, defuse, hostage
+        this.maxPlayers = gameMode === 'deathmatch' ? 16 : 10;
+        this.maxSpectators = 6;
         this.lastUpdate = Date.now();
+        this.map = this.generateMap();
+        this.roundTime = gameMode === 'deathmatch' ? 300000 : 120000; // 5min for DM, 2min for others
+        this.roundStartTime = null;
+        this.ctScore = 0;
+        this.tScore = 0;
+        this.maxRounds = gameMode === 'deathmatch' ? 1 : 15;
+        this.currentRound = 1;
+        this.chatMessages = [];
+        this.maxChatMessages = 50;
+        this.bombPlanted = false;
+        this.bombTimer = 45000; // 45 seconds
+        this.bombPlantTime = null;
+        this.hostagesRescued = 0;
+        this.totalHostages = 4;
     }
 
-    addPlayer(socketId, playerData) {
+    generateMap() {
+        const mapWidth = 1200;
+        const mapHeight = 800;
+        const mapTypes = ['dust2', 'inferno', 'mirage', 'cache'];
+        const selectedType = mapTypes[Math.floor(Math.random() * mapTypes.length)];
+        
+        const map = {
+            width: mapWidth,
+            height: mapHeight,
+            type: selectedType,
+            walls: [],
+            floors: [],
+            spawnPoints: {
+                ct: [],
+                t: []
+            },
+            objectives: [],
+            hostages: [],
+            cover: [],
+            textures: {
+                walls: 'wall_concrete.png',
+                floors: 'floor_tiles.png',
+                bombsites: 'bombsite_marker.png'
+            }
+        };
+
+        // Generate different map layouts based on type
+        switch (selectedType) {
+            case 'dust2':
+                this.generateDust2Layout(map);
+                break;
+            case 'inferno':
+                this.generateInfernoLayout(map);
+                break;
+            case 'mirage':
+                this.generateMirageLayout(map);
+                break;
+            case 'cache':
+                this.generateCacheLayout(map);
+                break;
+        }
+
+        // Add hostages for hostage rescue mode
+        if (this.gameMode === 'hostage') {
+            this.addHostages(map);
+        }
+
+        return map;
+    }
+
+    generateDust2Layout(map) {
+        // Main corridors and rooms
+        const rooms = [
+            { x: 50, y: 50, width: 200, height: 150, type: 'ct_spawn' },
+            { x: 950, y: 600, width: 200, height: 150, type: 't_spawn' },
+            { x: 300, y: 100, width: 150, height: 100, type: 'long_a' },
+            { x: 600, y: 500, width: 200, height: 120, type: 'bombsite_a' },
+            { x: 100, y: 400, width: 180, height: 100, type: 'bombsite_b' },
+            { x: 500, y: 200, width: 100, height: 200, type: 'mid' }
+        ];
+
+        // Create walls around rooms and corridors
+        rooms.forEach(room => {
+            // Room walls
+            map.walls.push(
+                { x: room.x - 10, y: room.y - 10, width: 10, height: room.height + 20, type: 'wall' },
+                { x: room.x + room.width, y: room.y - 10, width: 10, height: room.height + 20, type: 'wall' },
+                { x: room.x - 10, y: room.y - 10, width: room.width + 20, height: 10, type: 'wall' },
+                { x: room.x - 10, y: room.y + room.height, width: room.width + 20, height: 10, type: 'wall' }
+            );
+            
+            // Floor
+            map.floors.push({
+                x: room.x,
+                y: room.y,
+                width: room.width,
+                height: room.height,
+                type: 'floor'
+            });
+        });
+
+        // Add cover objects
+        map.cover.push(
+            { x: 400, y: 300, width: 60, height: 20, type: 'crate' },
+            { x: 700, y: 200, width: 40, height: 40, type: 'barrel' },
+            { x: 200, y: 500, width: 80, height: 30, type: 'crate' }
+        );
+
+        // Spawn points
+        for (let i = 0; i < 5; i++) {
+            map.spawnPoints.ct.push({
+                x: 70 + i * 30,
+                y: 100 + Math.random() * 50
+            });
+            map.spawnPoints.t.push({
+                x: 970 + i * 30,
+                y: 650 + Math.random() * 50
+            });
+        }
+
+        // Objectives
+        map.objectives.push(
+            { type: 'bombsite', name: 'A', x: 650, y: 550, width: 100, height: 70 },
+            { type: 'bombsite', name: 'B', x: 150, y: 450, width: 100, height: 70 }
+        );
+    }
+
+    generateInfernoLayout(map) {
+        // Inferno-style narrow corridors and apartments
+        const structures = [
+            { x: 50, y: 50, width: 180, height: 120, type: 'ct_spawn' },
+            { x: 970, y: 630, width: 180, height: 120, type: 't_spawn' },
+            { x: 300, y: 200, width: 200, height: 80, type: 'apartments' },
+            { x: 600, y: 400, width: 150, height: 100, type: 'bombsite_a' },
+            { x: 200, y: 500, width: 120, height: 80, type: 'bombsite_b' }
+        ];
+
+        structures.forEach(struct => {
+            // Create complex wall patterns
+            map.walls.push(
+                { x: struct.x - 15, y: struct.y - 15, width: 15, height: struct.height + 30, type: 'wall' },
+                { x: struct.x + struct.width, y: struct.y - 15, width: 15, height: struct.height + 30, type: 'wall' },
+                { x: struct.x - 15, y: struct.y - 15, width: struct.width + 30, height: 15, type: 'wall' },
+                { x: struct.x - 15, y: struct.y + struct.height, width: struct.width + 30, height: 15, type: 'wall' }
+            );
+            
+            map.floors.push({
+                x: struct.x,
+                y: struct.y,
+                width: struct.width,
+                height: struct.height,
+                type: 'floor'
+            });
+        });
+
+        // Spawn points
+        for (let i = 0; i < 5; i++) {
+            map.spawnPoints.ct.push({ x: 80 + i * 25, y: 90 + Math.random() * 40 });
+            map.spawnPoints.t.push({ x: 1000 + i * 25, y: 670 + Math.random() * 40 });
+        }
+
+        map.objectives.push(
+            { type: 'bombsite', name: 'A', x: 650, y: 450, width: 100, height: 70 },
+            { type: 'bombsite', name: 'B', x: 250, y: 550, width: 100, height: 70 }
+        );
+    }
+
+    generateMirageLayout(map) {
+        // Mirage-style open areas with connector
+        const areas = [
+            { x: 80, y: 80, width: 160, height: 100, type: 'ct_spawn' },
+            { x: 960, y: 620, width: 160, height: 100, type: 't_spawn' },
+            { x: 400, y: 150, width: 180, height: 120, type: 'connector' },
+            { x: 700, y: 350, width: 140, height: 90, type: 'bombsite_a' },
+            { x: 180, y: 450, width: 140, height: 90, type: 'bombsite_b' }
+        ];
+
+        areas.forEach(area => {
+            map.walls.push(
+                { x: area.x - 12, y: area.y - 12, width: 12, height: area.height + 24, type: 'wall' },
+                { x: area.x + area.width, y: area.y - 12, width: 12, height: area.height + 24, type: 'wall' },
+                { x: area.x - 12, y: area.y - 12, width: area.width + 24, height: 12, type: 'wall' },
+                { x: area.x - 12, y: area.y + area.height, width: area.width + 24, height: 12, type: 'wall' }
+            );
+            
+            map.floors.push({
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: area.height,
+                type: 'floor'
+            });
+        });
+
+        // Spawn points
+        for (let i = 0; i < 5; i++) {
+            map.spawnPoints.ct.push({ x: 100 + i * 25, y: 110 + Math.random() * 30 });
+            map.spawnPoints.t.push({ x: 980 + i * 25, y: 650 + Math.random() * 30 });
+        }
+
+        map.objectives.push(
+            { type: 'bombsite', name: 'A', x: 730, y: 380, width: 80, height: 60 },
+            { type: 'bombsite', name: 'B', x: 210, y: 480, width: 80, height: 60 }
+        );
+    }
+
+    generateCacheLayout(map) {
+        // Cache-style industrial layout
+        const zones = [
+            { x: 60, y: 60, width: 170, height: 110, type: 'ct_spawn' },
+            { x: 970, y: 630, width: 170, height: 110, type: 't_spawn' },
+            { x: 350, y: 180, width: 200, height: 100, type: 'main' },
+            { x: 650, y: 380, width: 160, height: 100, type: 'bombsite_a' },
+            { x: 150, y: 480, width: 160, height: 100, type: 'bombsite_b' }
+        ];
+
+        zones.forEach(zone => {
+            map.walls.push(
+                { x: zone.x - 10, y: zone.y - 10, width: 10, height: zone.height + 20, type: 'wall' },
+                { x: zone.x + zone.width, y: zone.y - 10, width: 10, height: zone.height + 20, type: 'wall' },
+                { x: zone.x - 10, y: zone.y - 10, width: zone.width + 20, height: 10, type: 'wall' },
+                { x: zone.x - 10, y: zone.y + zone.height, width: zone.width + 20, height: 10, type: 'wall' }
+            );
+            
+            map.floors.push({
+                x: zone.x,
+                y: zone.y,
+                width: zone.width,
+                height: zone.height,
+                type: 'floor'
+            });
+        });
+
+        // Spawn points
+        for (let i = 0; i < 5; i++) {
+            map.spawnPoints.ct.push({ x: 90 + i * 25, y: 90 + Math.random() * 40 });
+            map.spawnPoints.t.push({ x: 1000 + i * 25, y: 660 + Math.random() * 40 });
+        }
+
+        map.objectives.push(
+            { type: 'bombsite', name: 'A', x: 680, y: 410, width: 100, height: 70 },
+            { type: 'bombsite', name: 'B', x: 180, y: 510, width: 100, height: 70 }
+        );
+    }
+
+    addHostages(map) {
+        // Add hostages in random safe locations
+        const safeZones = [
+            { x: 300, y: 300, width: 100, height: 100 },
+            { x: 600, y: 200, width: 100, height: 100 },
+            { x: 200, y: 500, width: 100, height: 100 },
+            { x: 800, y: 400, width: 100, height: 100 }
+        ];
+
+        for (let i = 0; i < this.totalHostages; i++) {
+            const zone = safeZones[i % safeZones.length];
+            map.hostages.push({
+                id: i,
+                x: zone.x + Math.random() * zone.width,
+                y: zone.y + Math.random() * zone.height,
+                rescued: false
+            });
+        }
+    }
+
+    addPlayer(socketId, playerData, isSpectator = false) {
+        if (isSpectator) {
+            if (this.spectators.size >= this.maxSpectators) {
+                return false;
+            }
+            this.spectators.set(socketId, {
+                id: socketId,
+                name: playerData.name,
+                joinTime: Date.now()
+            });
+            return true;
+        }
+
         if (this.players.size >= this.maxPlayers) {
             return false;
         }
 
+        const team = this.gameMode === 'deathmatch' ? 'dm' :
+                    (this.players.size % 2 === 0 ? 'ct' : 't');
+        
+        const spawnPoint = this.getSpawnPoint(team);
+
         this.players.set(socketId, {
             id: socketId,
-            x: 100 + Math.random() * 600,
-            y: 100 + Math.random() * 400,
+            x: spawnPoint.x,
+            y: spawnPoint.y,
             angle: 0,
             health: 100,
             maxHealth: 100,
             score: 0,
+            kills: 0,
+            deaths: 0,
             weapon: {
                 ammo: 30,
                 maxAmmo: 30,
                 reserveAmmo: 90,
-                lastShot: 0
+                lastShot: 0,
+                type: 'ak47'
             },
-            team: this.players.size % 2 === 0 ? 'ct' : 't', // Counter-Terrorists vs Terrorists
+            team: team,
             alive: true,
+            money: this.gameMode === 'deathmatch' ? 16000 : 800,
             ...playerData
         });
 
         if (this.players.size >= 2 && this.gameState === 'waiting') {
             this.gameState = 'playing';
+            this.roundStartTime = Date.now();
         }
 
         return true;
+    }
+
+    getSpawnPoint(team) {
+        const spawnPoints = team === 'ct' ? this.map.spawnPoints.ct :
+                          team === 't' ? this.map.spawnPoints.t :
+                          [...this.map.spawnPoints.ct, ...this.map.spawnPoints.t];
+        
+        if (spawnPoints.length === 0) {
+            return { x: 100 + Math.random() * (this.map.width - 200),
+                    y: 100 + Math.random() * (this.map.height - 200) };
+        }
+        
+        return spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
+    }
+
+    addSpectator(socketId, playerData) {
+        return this.addPlayer(socketId, playerData, true);
+    }
+
+    removeSpectator(socketId) {
+        this.spectators.delete(socketId);
+    }
+
+    addChatMessage(playerId, message, type = 'all') {
+        const player = this.players.get(playerId) || this.spectators.get(playerId);
+        if (!player) return;
+
+        const chatMessage = {
+            id: Date.now() + Math.random(),
+            playerId: playerId,
+            playerName: player.name,
+            message: message.substring(0, 200), // Limit message length
+            type: type, // 'all', 'team', 'dead'
+            timestamp: Date.now()
+        };
+
+        this.chatMessages.push(chatMessage);
+        
+        // Keep only recent messages
+        if (this.chatMessages.length > this.maxChatMessages) {
+            this.chatMessages = this.chatMessages.slice(-this.maxChatMessages);
+        }
+
+        return chatMessage;
     }
 
     removePlayer(socketId) {
@@ -126,9 +454,21 @@ class GameRoom {
     getGameState() {
         return {
             players: Array.from(this.players.values()),
+            spectators: Array.from(this.spectators.values()),
             bullets: this.bullets,
             gameState: this.gameState,
-            roomId: this.id
+            gameMode: this.gameMode,
+            roomId: this.id,
+            map: this.map,
+            currentRound: this.currentRound,
+            ctScore: this.ctScore,
+            tScore: this.tScore,
+            roundTimeLeft: this.roundStartTime ?
+                Math.max(0, this.roundTime - (Date.now() - this.roundStartTime)) : this.roundTime,
+            chatMessages: this.chatMessages.slice(-10), // Send last 10 messages
+            bombPlanted: this.bombPlanted,
+            bombTimeLeft: this.bombPlanted ?
+                Math.max(0, this.bombTimer - (Date.now() - this.bombPlantTime)) : 0
         };
     }
 }
@@ -138,43 +478,117 @@ io.on('connection', (socket) => {
     console.log(`Player connected: ${socket.id}`);
 
     socket.on('joinRoom', (data) => {
-        const { roomId, playerName } = data;
+        const { roomId, playerName, gameMode = 'deathmatch', asSpectator = false } = data;
         
         // Leave any existing room
         if (players.has(socket.id)) {
             const oldRoomId = players.get(socket.id).roomId;
             socket.leave(oldRoomId);
             if (gameRooms.has(oldRoomId)) {
-                gameRooms.get(oldRoomId).removePlayer(socket.id);
+                const oldRoom = gameRooms.get(oldRoomId);
+                oldRoom.removePlayer(socket.id);
+                oldRoom.removeSpectator(socket.id);
             }
         }
 
         // Create room if it doesn't exist
         if (!gameRooms.has(roomId)) {
-            gameRooms.set(roomId, new GameRoom(roomId));
+            gameRooms.set(roomId, new GameRoom(roomId, gameMode));
         }
 
         const room = gameRooms.get(roomId);
         
-        // Try to add player to room
-        const success = room.addPlayer(socket.id, { name: playerName });
+        // Try to add player or spectator to room
+        const success = asSpectator ?
+            room.addSpectator(socket.id, { name: playerName }) :
+            room.addPlayer(socket.id, { name: playerName });
         
         if (success) {
             socket.join(roomId);
-            players.set(socket.id, { roomId, name: playerName });
+            players.set(socket.id, { roomId, name: playerName, isSpectator: asSpectator });
             
             // Send initial game state to new player
             socket.emit('gameState', room.getGameState());
             
             // Notify other players
-            socket.to(roomId).emit('playerJoined', {
+            socket.to(roomId).emit(asSpectator ? 'spectatorJoined' : 'playerJoined', {
                 playerId: socket.id,
                 playerName: playerName
             });
             
-            console.log(`Player ${playerName} joined room ${roomId}`);
+            console.log(`${asSpectator ? 'Spectator' : 'Player'} ${playerName} joined room ${roomId}`);
         } else {
-            socket.emit('joinError', 'Room is full');
+            socket.emit('joinError', asSpectator ? 'Spectator slots full' : 'Room is full');
+        }
+    });
+
+    socket.on('switchToSpectator', () => {
+        const playerInfo = players.get(socket.id);
+        if (!playerInfo || playerInfo.isSpectator) return;
+
+        const room = gameRooms.get(playerInfo.roomId);
+        if (!room) return;
+
+        // Remove from players and add to spectators
+        room.removePlayer(socket.id);
+        const success = room.addSpectator(socket.id, { name: playerInfo.name });
+        
+        if (success) {
+            playerInfo.isSpectator = true;
+            socket.to(playerInfo.roomId).emit('playerBecameSpectator', {
+                playerId: socket.id,
+                playerName: playerInfo.name
+            });
+        }
+    });
+
+    socket.on('switchToPlayer', () => {
+        const playerInfo = players.get(socket.id);
+        if (!playerInfo || !playerInfo.isSpectator) return;
+
+        const room = gameRooms.get(playerInfo.roomId);
+        if (!room) return;
+
+        // Remove from spectators and add to players
+        room.removeSpectator(socket.id);
+        const success = room.addPlayer(socket.id, { name: playerInfo.name });
+        
+        if (success) {
+            playerInfo.isSpectator = false;
+            socket.to(playerInfo.roomId).emit('spectatorBecamePlayer', {
+                playerId: socket.id,
+                playerName: playerInfo.name
+            });
+        } else {
+            socket.emit('joinError', 'Cannot join game - room is full');
+        }
+    });
+
+    socket.on('chatMessage', (data) => {
+        const playerInfo = players.get(socket.id);
+        if (!playerInfo) return;
+
+        const room = gameRooms.get(playerInfo.roomId);
+        if (!room) return;
+
+        const chatMessage = room.addChatMessage(socket.id, data.message, data.type || 'all');
+        
+        if (chatMessage) {
+            // Broadcast to appropriate recipients
+            if (data.type === 'team') {
+                const player = room.players.get(socket.id);
+                if (player) {
+                    // Send to team members only
+                    room.players.forEach((p, id) => {
+                        if (p.team === player.team) {
+                            io.to(id).emit('chatMessage', chatMessage);
+                        }
+                    });
+                }
+            } else {
+                // Send to all players and spectators in room
+                io.to(playerInfo.roomId).emit('chatMessage', chatMessage);
+            }
         }
     });
 
@@ -283,14 +697,16 @@ io.on('connection', (socket) => {
             const room = gameRooms.get(playerInfo.roomId);
             if (room) {
                 room.removePlayer(socket.id);
+                room.removeSpectator(socket.id);
                 
                 // Notify other players
                 socket.to(playerInfo.roomId).emit('playerLeft', {
-                    playerId: socket.id
+                    playerId: socket.id,
+                    wasSpectator: playerInfo.isSpectator
                 });
 
                 // Clean up empty rooms
-                if (room.players.size === 0) {
+                if (room.players.size === 0 && room.spectators.size === 0) {
                     gameRooms.delete(playerInfo.roomId);
                 }
             }
