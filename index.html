@@ -24,6 +24,23 @@
             <div class="multiplayer-form">
                 <input type="text" id="playerName" placeholder="Enter your name" maxlength="20">
                 <input type="text" id="roomId" placeholder="Room ID (leave empty for random)" maxlength="20">
+
+                <div class="game-mode-selection">
+                    <label>Game Mode:</label>
+                    <select id="gameMode">
+                        <option value="deathmatch">Deathmatch</option>
+                        <option value="teamdeathmatch">Team Deathmatch</option>
+                        <option value="defuse">Bomb Defusal</option>
+                        <option value="hostage">Hostage Rescue</option>
+                    </select>
+                </div>
+
+                <div class="join-options">
+                    <label>
+                        <input type="checkbox" id="joinAsSpectator"> Join as Spectator
+                    </label>
+                </div>
+
                 <div class="menu-buttons">
                     <button id="joinGame">Join Game</button>
                     <button id="backToMainMenu2">Back to Menu</button>
@@ -45,26 +62,62 @@
         </div>
 
         <div id="gameScreen" class="screen">
-            <canvas id="gameCanvas" width="800" height="600"></canvas>
+            <canvas id="gameCanvas" width="1200" height="800"></canvas>
             <div id="gameUI">
-                <div id="healthBar">
-                    <span>Health: </span>
-                    <div class="bar">
-                        <div id="healthFill" class="bar-fill"></div>
+                <div class="ui-left">
+                    <div id="healthBar">
+                        <span>Health: </span>
+                        <div class="bar">
+                            <div id="healthFill" class="bar-fill"></div>
+                        </div>
+                        <span id="healthText">100</span>
                     </div>
-                    <span id="healthText">100</span>
+                    <div id="ammoCounter">
+                        <span>Ammo: </span>
+                        <span id="ammoText">30/90</span>
+                    </div>
+                    <div id="scoreDisplay">
+                        <span>Score: </span>
+                        <span id="scoreText">0</span>
+                    </div>
                 </div>
-                <div id="ammoCounter">
-                    <span>Ammo: </span>
-                    <span id="ammoText">30/90</span>
+
+                <div class="ui-center">
+                    <div id="roundInfo" style="display: none;">
+                        <div id="roundCounter">Round: <span id="roundText">1</span></div>
+                        <div id="teamScores">
+                            <span class="ct-score">CT: <span id="ctScoreText">0</span></span>
+                            <span class="t-score">T: <span id="tScoreText">0</span></span>
+                        </div>
+                        <div id="roundTimer">Time: <span id="roundTimeText">2:00</span></div>
+                    </div>
                 </div>
-                <div id="scoreDisplay">
-                    <span>Score: </span>
-                    <span id="scoreText">0</span>
+
+                <div class="ui-right">
+                    <div id="multiplayerInfo" style="display: none;">
+                        <div id="playerCount">Players: <span id="playerCountText">1</span></div>
+                        <div id="spectatorCount">Spectators: <span id="spectatorCountText">0</span></div>
+                        <div id="roomInfo">Room: <span id="roomIdText">-</span></div>
+                        <div id="gameMode">Mode: <span id="gameModeText">Deathmatch</span></div>
+                    </div>
+
+                    <div id="spectatorControls" style="display: none;">
+                        <button id="switchToPlayer">Join Game</button>
+                        <button id="switchToSpectator">Spectate</button>
+                    </div>
                 </div>
-                <div id="multiplayerInfo">
-                    <div id="playerCount">Players: <span id="playerCountText">1</span></div>
-                    <div id="roomInfo">Room: <span id="roomIdText">-</span></div>
+            </div>
+
+            <!-- Chat System -->
+            <div id="chatContainer" style="display: none;">
+                <div id="chatMessages"></div>
+                <div id="chatInput">
+                    <select id="chatType">
+                        <option value="all">All</option>
+                        <option value="team">Team</option>
+                    </select>
+                    <input type="text" id="chatMessageInput" placeholder="Type message..." maxlength="200">
+                    <button id="sendChat">Send</button>
                 </div>
             </div>
         </div>
@@ -80,7 +133,15 @@
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="game.js"></script>
+    <script src="textures/texture-loader.js"></script>
+
+    <!-- Game modules in dependency order -->
+    <script src="js/game-state.js"></script>
+    <script src="js/entities.js"></script>
+    <script src="js/camera-world.js"></script>
+    <script src="js/multiplayer.js"></script>
+    <script src="js/renderer.js"></script>
+    <script src="js/game-logic.js"></script>
 </body>
 
 </html>

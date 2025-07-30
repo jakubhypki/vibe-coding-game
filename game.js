@@ -2,36 +2,69 @@
 const Game = {
     canvas: null,
     ctx: null,
-    width: 800,
-    height: 600,
+    width: 1200,
+    height: 800,
     state: 'menu', // menu, playing, paused, gameOver
     mode: 'singleplayer', // singleplayer, multiplayer
+    gameMode: 'deathmatch', // deathmatch, teamdeathmatch, defuse, hostage
     lastTime: 0,
     deltaTime: 0,
-    textures: {}, // Do przechowywania załadowanych tekstur
+
+    // Camera system
+    camera: {
+        x: 0,
+        y: 0,
+        targetX: 0,
+        targetY: 0,
+        smoothing: 0.1,
+        bounds: {
+            minX: -2000,
+            maxX: 2000,
+            minY: -2000,
+            maxY: 2000
+        }
+    },
+
+    // World system for infinite generation
+    world: {
+        chunkSize: 400,
+        loadedChunks: new Map(),
+        generatedChunks: new Set(),
+        loadDistance: 2 // chunks to load around player
+    },
 
     // Multiplayer
     socket: null,
     isMultiplayer: false,
+    isSpectator: false,
     playerId: null,
     roomId: null,
     playerName: '',
+    chatVisible: false,
 
     // Game objects
     player: null,
     otherPlayers: new Map(),
+    spectators: new Map(),
     enemies: [],
     bullets: [],
     particles: [],
+    map: null,
 
     // Input handling
     keys: {},
-    mouse: { x: 0, y: 0, clicked: false },
+    mouse: { x: 0, y: 0, clicked: false, worldX: 0, worldY: 0 },
 
     // Game stats
     score: 0,
     level: 1,
-    enemiesKilled: 0
+    enemiesKilled: 0,
+    roundInfo: {
+        current: 1,
+        ctScore: 0,
+        tScore: 0,
+        timeLeft: 120000
+    }
 };
 
 // Player class
@@ -39,17 +72,20 @@ class Player {
     constructor(x, y, isLocal = true, team = 'ct') {
         this.x = x;
         this.y = y;
-        this.width = 50;
-        this.height = 50;
+        this.width = 24;
+        this.height = 24;
         this.speed = 200;
         this.health = 100;
         this.maxHealth = 100;
         this.angle = 0;
-        this.team = team; // 'ct' (Counter-Terrorists) or 't' (Terrorists)
+        this.team = team; // 'ct' (Counter-Terrorists), 't' (Terrorists), or 'dm' (Deathmatch)
         this.alive = true;
         this.isLocal = isLocal;
         this.name = '';
         this.score = 0;
+        this.kills = 0;
+        this.deaths = 0;
+        this.money = 800;
         this.weapon = {
             ammo: 30,
             maxAmmo: 30,
@@ -57,7 +93,8 @@ class Player {
             fireRate: 150, // ms between shots
             lastShot: 0,
             damage: 25,
-            range: 400
+            range: 400,
+            type: 'ak47'
         };
     }
 
@@ -78,19 +115,28 @@ class Player {
             dy *= 0.707;
         }
 
-        // Apply movement
-        const newX = this.x + dx * this.speed * deltaTime;
-        const newY = this.y + dy * this.speed * deltaTime;
+        // Apply movement with collision detection
+        const moveDistance = this.speed * deltaTime;
+        const newX = this.x + dx * moveDistance;
+        const newY = this.y + dy * moveDistance;
+
+        // Check collision with walls
+        if (this.canMoveTo(newX, this.y)) {
+            this.x = newX;
+        }
+        if (this.canMoveTo(this.x, newY)) {
+            this.y = newY;
+        }
 
         // Keep player in bounds
-        this.x = Math.max(this.width / 2, Math.min(Game.width - this.width / 2, newX));
-        this.y = Math.max(this.height / 2, Math.min(Game.height - this.height / 2, newY));
+        this.x = Math.max(this.width / 2, Math.min(Game.width - this.width / 2, this.x));
+        this.y = Math.max(this.height / 2, Math.min(Game.height - this.height / 2, this.y));
 
-        // Calculate angle to mouse
-        this.angle = Math.atan2(Game.mouse.y - this.y, Game.mouse.x - this.x);
+        // Calculate angle to mouse (using world coordinates)
+        this.angle = Math.atan2(Game.mouse.worldY - this.y, Game.mouse.worldX - this.x);
 
         // Send position update to server if multiplayer
-        if (Game.isMultiplayer && Game.socket) {
+        if (Game.isMultiplayer && Game.socket && !Game.isSpectator) {
             Game.socket.emit('playerUpdate', {
                 x: this.x,
                 y: this.y,
@@ -109,6 +155,42 @@ class Player {
         if (Game.keys['r'] || Game.keys['R']) {
             this.reload();
         }
+    }
+
+    canMoveTo(x, y) {
+        if (!Game.map || !Game.map.walls) return true;
+
+        const playerRect = {
+            x: x - this.width / 2,
+            y: y - this.height / 2,
+            width: this.width,
+            height: this.height
+        };
+
+        // Check collision with walls
+        for (const wall of Game.map.walls) {
+            if (this.rectCollision(playerRect, wall)) {
+                return false;
+            }
+        }
+
+        // Check collision with cover objects
+        if (Game.map.cover) {
+            for (const cover of Game.map.cover) {
+                if (this.rectCollision(playerRect, cover)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    rectCollision(rect1, rect2) {
+        return rect1.x < rect2.x + rect2.width &&
+            rect1.x + rect1.width > rect2.x &&
+            rect1.y < rect2.y + rect2.height &&
+            rect1.y + rect1.height > rect2.y;
     }
 
     canShoot() {
@@ -201,32 +283,33 @@ class Player {
         ctx.translate(this.x, this.y);
         ctx.rotate(this.angle);
 
-        // Użyj tekstury dla głównego bohatera
-        if (this.isLocal && Game.textures.ground_2) {
-            // Utwórz wzór z tekstury
-            const pattern = ctx.createPattern(Game.textures.ground_2, 'repeat');
-            ctx.fillStyle = pattern;
+        // Draw player using texture or fallback to colored rectangle
+        const textureName = this.team === 'ct' ? 'player_ct' :
+            this.team === 't' ? 'player_t' : 'player_ct';
+
+        if (window.TextureManager) {
+            window.TextureManager.drawTexture(ctx, textureName,
+                -this.width / 2, -this.height / 2, this.width, this.height);
         } else {
-            // Dla innych graczy użyj kolorów drużyn
+            // Fallback to colored rectangles
             if (this.team === 'ct') {
                 ctx.fillStyle = this.isLocal ? '#0066cc' : '#0088ff';
-            } else {
+            } else if (this.team === 't') {
                 ctx.fillStyle = this.isLocal ? '#cc6600' : '#ff8800';
+            } else {
+                ctx.fillStyle = this.isLocal ? '#00cc66' : '#00ff88';
             }
-        }
-
-        ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
-
-        // Dodaj obramowanie dla lepszej widoczności
-        if (this.isLocal) {
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(-this.width / 2, -this.height / 2, this.width, this.height);
+            ctx.fillRect(-this.width / 2, -this.height / 2, this.width, this.height);
         }
 
         // Draw weapon
-        ctx.fillStyle = '#333';
-        ctx.fillRect(0, -3, 25, 6);
+        const weaponTexture = `weapon_${this.weapon.type}`;
+        if (window.TextureManager) {
+            window.TextureManager.drawTexture(ctx, weaponTexture, 0, -3, 25, 6);
+        } else {
+            ctx.fillStyle = '#333';
+            ctx.fillRect(0, -3, 25, 6);
+        }
 
         // Draw direction indicator
         ctx.fillStyle = '#fff';
@@ -239,16 +322,24 @@ class Player {
             ctx.fillStyle = '#fff';
             ctx.font = '12px Arial';
             ctx.textAlign = 'center';
-            ctx.fillText(this.name, this.x, this.y - 25);
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 2;
+            ctx.strokeText(this.name, this.x, this.y - 30);
+            ctx.fillText(this.name, this.x, this.y - 30);
         }
 
         // Draw health bar for other players
         if (!this.isLocal) {
             const healthPercent = this.health / this.maxHealth;
             ctx.fillStyle = '#ff0000';
-            ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2 - 8, this.width, 3);
+            ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2 - 10, this.width, 4);
             ctx.fillStyle = '#00ff00';
-            ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2 - 8, this.width * healthPercent, 3);
+            ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2 - 10, this.width * healthPercent, 4);
+
+            // Health bar border
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(this.x - this.width / 2, this.y - this.height / 2 - 10, this.width, 4);
         }
     }
 }
@@ -427,32 +518,79 @@ function initMultiplayer() {
     });
 
     Game.socket.on('gameState', (gameState) => {
+        // Update map
+        if (gameState.map) {
+            Game.map = gameState.map;
+        }
+
         // Update other players
         Game.otherPlayers.clear();
-        gameState.players.forEach(playerData => {
-            if (playerData.id !== Game.socket.id) {
-                const otherPlayer = new Player(playerData.x, playerData.y, false, playerData.team);
-                otherPlayer.health = playerData.health;
-                otherPlayer.alive = playerData.alive;
-                otherPlayer.angle = playerData.angle;
-                otherPlayer.name = playerData.name;
-                otherPlayer.score = playerData.score;
-                Game.otherPlayers.set(playerData.id, otherPlayer);
-            } else {
-                // Update local player from server
-                if (Game.player) {
-                    Game.player.health = playerData.health;
-                    Game.player.alive = playerData.alive;
-                    Game.player.score = playerData.score;
-                    Game.player.weapon.ammo = playerData.weapon.ammo;
-                    Game.player.weapon.reserveAmmo = playerData.weapon.reserveAmmo;
+        if (gameState.players) {
+            gameState.players.forEach(playerData => {
+                if (playerData.id !== Game.socket.id) {
+                    const otherPlayer = new Player(playerData.x, playerData.y, false, playerData.team);
+                    otherPlayer.health = playerData.health;
+                    otherPlayer.alive = playerData.alive;
+                    otherPlayer.angle = playerData.angle;
+                    otherPlayer.name = playerData.name;
+                    otherPlayer.score = playerData.score;
+                    otherPlayer.kills = playerData.kills || 0;
+                    otherPlayer.deaths = playerData.deaths || 0;
+                    if (playerData.weapon) {
+                        otherPlayer.weapon = { ...otherPlayer.weapon, ...playerData.weapon };
+                    }
+                    Game.otherPlayers.set(playerData.id, otherPlayer);
+                } else if (!Game.isSpectator) {
+                    // Update local player from server
+                    if (Game.player) {
+                        Game.player.health = playerData.health;
+                        Game.player.alive = playerData.alive;
+                        Game.player.score = playerData.score;
+                        Game.player.kills = playerData.kills || 0;
+                        Game.player.deaths = playerData.deaths || 0;
+                        Game.player.money = playerData.money || 800;
+                        if (playerData.weapon) {
+                            Game.player.weapon.ammo = playerData.weapon.ammo;
+                            Game.player.weapon.reserveAmmo = playerData.weapon.reserveAmmo;
+                        }
+                    }
                 }
-            }
-        });
+            });
+        }
+
+        // Update spectators
+        Game.spectators.clear();
+        if (gameState.spectators) {
+            gameState.spectators.forEach(spectatorData => {
+                Game.spectators.set(spectatorData.id, spectatorData);
+            });
+        }
+
+        // Update round info
+        if (gameState.currentRound !== undefined) {
+            Game.roundInfo.current = gameState.currentRound;
+            Game.roundInfo.ctScore = gameState.ctScore || 0;
+            Game.roundInfo.tScore = gameState.tScore || 0;
+            Game.roundInfo.timeLeft = gameState.roundTimeLeft || 0;
+        }
 
         // Update multiplayer UI
-        document.getElementById('playerCountText').textContent = gameState.players.length;
-        document.getElementById('roomIdText').textContent = gameState.roomId;
+        document.getElementById('playerCountText').textContent = gameState.players ? gameState.players.length : 0;
+        document.getElementById('spectatorCountText').textContent = gameState.spectators ? gameState.spectators.length : 0;
+        document.getElementById('roomIdText').textContent = gameState.roomId || '-';
+        document.getElementById('gameModeText').textContent = gameState.gameMode || 'Unknown';
+
+        // Update round UI
+        if (gameState.gameMode !== 'deathmatch') {
+            document.getElementById('roundInfo').style.display = 'block';
+            document.getElementById('roundText').textContent = Game.roundInfo.current;
+            document.getElementById('ctScoreText').textContent = Game.roundInfo.ctScore;
+            document.getElementById('tScoreText').textContent = Game.roundInfo.tScore;
+
+            const minutes = Math.floor(Game.roundInfo.timeLeft / 60000);
+            const seconds = Math.floor((Game.roundInfo.timeLeft % 60000) / 1000);
+            document.getElementById('roundTimeText').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
     });
 
     Game.socket.on('playerUpdate', (data) => {
@@ -508,11 +646,258 @@ function initMultiplayer() {
         }
     });
 
+    Game.socket.on('chatMessage', (data) => {
+        addChatMessage(data);
+    });
+
     Game.socket.on('joinError', (message) => {
         document.getElementById('connectionStatus').textContent = 'Error: ' + message;
     });
 
     return true;
+}
+
+// Chat system functions
+function addChatMessage(messageData) {
+    const chatMessages = document.getElementById('chatMessages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message ${messageData.type}`;
+
+    const playerName = document.createElement('span');
+    playerName.className = 'player-name';
+    playerName.textContent = messageData.playerName + ': ';
+
+    const messageText = document.createElement('span');
+    messageText.className = 'message-text';
+    messageText.textContent = messageData.message;
+
+    messageDiv.appendChild(playerName);
+    messageDiv.appendChild(messageText);
+    chatMessages.appendChild(messageDiv);
+
+    // Auto-scroll to bottom
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    // Remove old messages if too many
+    while (chatMessages.children.length > 50) {
+        chatMessages.removeChild(chatMessages.firstChild);
+    }
+}
+
+function sendChatMessage() {
+    const messageInput = document.getElementById('chatMessageInput');
+    const chatType = document.getElementById('chatType').value;
+    const message = messageInput.value.trim();
+
+    if (message && Game.socket) {
+        Game.socket.emit('chatMessage', {
+            message: message,
+            type: chatType
+        });
+        messageInput.value = '';
+    }
+}
+
+function toggleChat() {
+    const chatContainer = document.getElementById('chatContainer');
+    Game.chatVisible = !Game.chatVisible;
+    chatContainer.style.display = Game.chatVisible ? 'block' : 'none';
+
+    if (Game.chatVisible) {
+        document.getElementById('chatMessageInput').focus();
+    }
+}
+
+// Camera system functions
+function updateCamera() {
+    if (Game.player && !Game.isSpectator) {
+        // Set camera target to player position
+        Game.camera.targetX = Game.player.x - Game.width / 2;
+        Game.camera.targetY = Game.player.y - Game.height / 2;
+    }
+
+    // Smooth camera movement
+    Game.camera.x += (Game.camera.targetX - Game.camera.x) * Game.camera.smoothing;
+    Game.camera.y += (Game.camera.targetY - Game.camera.y) * Game.camera.smoothing;
+
+    // Apply camera bounds
+    Game.camera.x = Math.max(Game.camera.bounds.minX,
+        Math.min(Game.camera.bounds.maxX - Game.width, Game.camera.x));
+    Game.camera.y = Math.max(Game.camera.bounds.minY,
+        Math.min(Game.camera.bounds.maxY - Game.height, Game.camera.y));
+}
+
+// Infinite map generation system
+function getChunkKey(chunkX, chunkY) {
+    return `${chunkX},${chunkY}`;
+}
+
+function worldToChunk(worldX, worldY) {
+    return {
+        x: Math.floor(worldX / Game.world.chunkSize),
+        y: Math.floor(worldY / Game.world.chunkSize)
+    };
+}
+
+function generateChunk(chunkX, chunkY) {
+    const chunkKey = getChunkKey(chunkX, chunkY);
+    if (Game.world.generatedChunks.has(chunkKey)) {
+        return Game.world.loadedChunks.get(chunkKey);
+    }
+
+    const chunk = {
+        x: chunkX,
+        y: chunkY,
+        worldX: chunkX * Game.world.chunkSize,
+        worldY: chunkY * Game.world.chunkSize,
+        walls: [],
+        floors: [],
+        cover: [],
+        enemies: []
+    };
+
+    // Generate procedural content for this chunk
+    const seed = chunkX * 1000 + chunkY; // Simple seed based on chunk coordinates
+    Math.seedrandom = function (seed) {
+        let m = 0x80000000; // 2**31
+        let a = 1103515245;
+        let c = 12345;
+        let state = seed ? seed : Math.floor(Math.random() * (m - 1));
+
+        return function () {
+            state = (a * state + c) % m;
+            return state / (m - 1);
+        };
+    };
+
+    const random = Math.seedrandom(seed);
+
+    // Generate floor for entire chunk
+    chunk.floors.push({
+        x: chunk.worldX,
+        y: chunk.worldY,
+        width: Game.world.chunkSize,
+        height: Game.world.chunkSize,
+        type: 'floor'
+    });
+
+    // Generate walls
+    const wallCount = 3 + Math.floor(random() * 5);
+    for (let i = 0; i < wallCount; i++) {
+        const wall = {
+            x: chunk.worldX + random() * (Game.world.chunkSize - 100),
+            y: chunk.worldY + random() * (Game.world.chunkSize - 100),
+            width: 20 + random() * 60,
+            height: 20 + random() * 60,
+            type: 'wall'
+        };
+        chunk.walls.push(wall);
+    }
+
+    // Generate cover objects
+    const coverCount = 2 + Math.floor(random() * 4);
+    for (let i = 0; i < coverCount; i++) {
+        const cover = {
+            x: chunk.worldX + random() * (Game.world.chunkSize - 50),
+            y: chunk.worldY + random() * (Game.world.chunkSize - 50),
+            width: 30 + random() * 20,
+            height: 30 + random() * 20,
+            type: random() > 0.5 ? 'crate' : 'barrel'
+        };
+        chunk.cover.push(cover);
+    }
+
+    // Generate enemies for single player
+    if (!Game.isMultiplayer) {
+        const enemyCount = 1 + Math.floor(random() * 3);
+        for (let i = 0; i < enemyCount; i++) {
+            const enemy = new Enemy(
+                chunk.worldX + random() * Game.world.chunkSize,
+                chunk.worldY + random() * Game.world.chunkSize
+            );
+            chunk.enemies.push(enemy);
+        }
+    }
+
+    Game.world.loadedChunks.set(chunkKey, chunk);
+    Game.world.generatedChunks.add(chunkKey);
+
+    return chunk;
+}
+
+function updateWorldGeneration() {
+    if (!Game.player) return;
+
+    const playerChunk = worldToChunk(Game.player.x, Game.player.y);
+    const loadDistance = Game.world.loadDistance;
+
+    // Generate chunks around player
+    for (let x = playerChunk.x - loadDistance; x <= playerChunk.x + loadDistance; x++) {
+        for (let y = playerChunk.y - loadDistance; y <= playerChunk.y + loadDistance; y++) {
+            generateChunk(x, y);
+        }
+    }
+
+    // Update camera bounds based on generated world
+    const minChunkX = playerChunk.x - loadDistance;
+    const maxChunkX = playerChunk.x + loadDistance;
+    const minChunkY = playerChunk.y - loadDistance;
+    const maxChunkY = playerChunk.y + loadDistance;
+
+    Game.camera.bounds.minX = minChunkX * Game.world.chunkSize;
+    Game.camera.bounds.maxX = (maxChunkX + 1) * Game.world.chunkSize;
+    Game.camera.bounds.minY = minChunkY * Game.world.chunkSize;
+    Game.camera.bounds.maxY = (maxChunkY + 1) * Game.world.chunkSize;
+
+    // Unload distant chunks to save memory
+    const chunksToUnload = [];
+    Game.world.loadedChunks.forEach((chunk, key) => {
+        const distance = Math.max(
+            Math.abs(chunk.x - playerChunk.x),
+            Math.abs(chunk.y - playerChunk.y)
+        );
+        if (distance > loadDistance + 1) {
+            chunksToUnload.push(key);
+        }
+    });
+
+    chunksToUnload.forEach(key => {
+        const chunk = Game.world.loadedChunks.get(key);
+        // Remove enemies from the main game arrays
+        if (chunk.enemies) {
+            chunk.enemies.forEach(enemy => {
+                const index = Game.enemies.indexOf(enemy);
+                if (index > -1) {
+                    Game.enemies.splice(index, 1);
+                }
+            });
+        }
+        Game.world.loadedChunks.delete(key);
+    });
+
+    // Add enemies from loaded chunks to main game arrays
+    Game.enemies = [];
+    Game.world.loadedChunks.forEach(chunk => {
+        if (chunk.enemies) {
+            Game.enemies.push(...chunk.enemies);
+        }
+    });
+}
+
+function getAllWalls() {
+    const walls = [];
+    Game.world.loadedChunks.forEach(chunk => {
+        walls.push(...chunk.walls);
+    });
+    return walls;
+}
+
+function getAllCover() {
+    const cover = [];
+    Game.world.loadedChunks.forEach(chunk => {
+        cover.push(...chunk.cover);
+    });
+    return cover;
 }
 
 // Game initialization
@@ -579,6 +964,11 @@ function setupEventListeners() {
 
     // Keyboard events
     document.addEventListener('keydown', (e) => {
+        // Don't process game keys if chat is focused
+        if (document.activeElement === document.getElementById('chatMessageInput')) {
+            return;
+        }
+
         Game.keys[e.key] = true;
 
         if (e.key === 'Escape') {
@@ -587,6 +977,12 @@ function setupEventListeners() {
             } else if (Game.state === 'paused') {
                 Game.state = 'playing';
             }
+        }
+
+        // Toggle chat with Enter or T
+        if ((e.key === 'Enter' || e.key === 't' || e.key === 'T') && Game.state === 'playing') {
+            e.preventDefault();
+            toggleChat();
         }
 
         // Respawn in multiplayer
