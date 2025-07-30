@@ -425,13 +425,12 @@ class GameRoom {
 
     update() {
         const now = Date.now();
-        
+        const deltaTime = (now - this.lastUpdate) / 1000;
         // Update bullet positions
         this.bullets.forEach(bullet => {
             bullet.x += Math.cos(bullet.angle) * bullet.speed * deltaTime;
             bullet.y += Math.sin(bullet.angle) * bullet.speed * deltaTime;
         });
-        const deltaTime = (now - this.lastUpdate) / 1000;
         
         // Remove old bullets (after 3 seconds) or bullets that hit walls
         this.bullets = this.bullets.filter(bullet => {
