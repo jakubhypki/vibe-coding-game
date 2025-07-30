@@ -90,7 +90,7 @@ button:hover {
     margin-bottom: 2rem;
 }
 
-.multiplayer-form input {
+.multiplayer-form input, .multiplayer-form select {
     padding: 12px 16px;
     font-size: 1.1rem;
     font-family: inherit;
@@ -102,7 +102,7 @@ button:hover {
     text-align: center;
 }
 
-.multiplayer-form input:focus {
+.multiplayer-form input:focus, .multiplayer-form select:focus {
     outline: none;
     border-color: #ff6b35;
     background: rgba(255, 255, 255, 0.15);
@@ -110,6 +110,35 @@ button:hover {
 
 .multiplayer-form input::placeholder {
     color: #aaa;
+}
+
+.game-mode-selection {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.game-mode-selection label {
+    color: #fff;
+    font-size: 1rem;
+}
+
+.join-options {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.join-options label {
+    color: #fff;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+.join-options input[type="checkbox"] {
+    width: auto;
+    margin-right: 0.5rem;
 }
 
 .status-message {
@@ -140,11 +169,25 @@ button:hover {
     right: 20px;
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-end;
     background: rgba(0, 0, 0, 0.8);
     padding: 15px;
     border-radius: 10px;
     font-size: 1.1rem;
+}
+
+.ui-left, .ui-center, .ui-right {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.ui-center {
+    align-items: center;
+}
+
+.ui-right {
+    align-items: flex-end;
 }
 
 #healthBar {
@@ -173,6 +216,31 @@ button:hover {
     font-weight: bold;
 }
 
+#roundInfo {
+    text-align: center;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 10px;
+    border-radius: 8px;
+    border: 2px solid #ff6b35;
+}
+
+#teamScores {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    margin: 5px 0;
+}
+
+.ct-score {
+    color: #4169E1;
+    font-weight: bold;
+}
+
+.t-score {
+    color: #ff6b35;
+    font-weight: bold;
+}
+
 #multiplayerInfo {
     display: flex;
     flex-direction: column;
@@ -185,6 +253,26 @@ button:hover {
     background: rgba(0, 0, 0, 0.5);
     padding: 5px 10px;
     border-radius: 5px;
+}
+
+#spectatorControls {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+#spectatorControls button {
+    padding: 8px 12px;
+    font-size: 0.9rem;
+    background: rgba(255, 107, 53, 0.8);
+    border: none;
+    border-radius: 4px;
+    color: white;
+    cursor: pointer;
+}
+
+#spectatorControls button:hover {
+    background: rgba(255, 107, 53, 1);
 }
 
 /* Game Over Screen */
@@ -248,4 +336,112 @@ button:hover {
     height: 2px;
     left: 0;
     top: 9px;
+}
+
+/* Chat System */
+#chatContainer {
+    position: absolute;
+    bottom: 120px;
+    left: 20px;
+    width: 400px;
+    background: rgba(0, 0, 0, 0.8);
+    border-radius: 8px;
+    padding: 10px;
+}
+
+#chatMessages {
+    height: 150px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+    padding: 5px;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+
+.chat-message {
+    margin-bottom: 5px;
+    padding: 2px 5px;
+    border-radius: 3px;
+}
+
+.chat-message.team {
+    background: rgba(65, 105, 225, 0.2);
+    border-left: 3px solid #4169E1;
+}
+
+.chat-message.all {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-message .player-name {
+    font-weight: bold;
+    color: #ff6b35;
+}
+
+.chat-message .message-text {
+    color: #fff;
+}
+
+#chatInput {
+    display: flex;
+    gap: 5px;
+}
+
+#chatType {
+    width: 80px;
+    padding: 5px;
+    font-size: 0.9rem;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border: 1px solid #555;
+    border-radius: 3px;
+}
+
+#chatMessageInput {
+    flex: 1;
+    padding: 5px 10px;
+    font-size: 0.9rem;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border: 1px solid #555;
+    border-radius: 3px;
+}
+
+#chatMessageInput:focus {
+    outline: none;
+    border-color: #ff6b35;
+}
+
+#sendChat {
+    padding: 5px 15px;
+    font-size: 0.9rem;
+    background: #ff6b35;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+#sendChat:hover {
+    background: #f7931e;
+}
+
+/* Scrollbar styling for chat */
+#chatMessages::-webkit-scrollbar {
+    width: 6px;
+}
+
+#chatMessages::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 3px;
+}
+
+#chatMessages::-webkit-scrollbar-thumb {
+    background: rgba(255, 107, 53, 0.6);
+    border-radius: 3px;
+}
+
+#chatMessages::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 107, 53, 0.8);
 }
