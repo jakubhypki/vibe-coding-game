@@ -414,38 +414,90 @@ class GameRoom {
 
     update() {
         const now = Date.now();
+        const deltaTime = (now - this.lastUpdate) / 1000; // Convert to seconds
         
-        // Remove old bullets (after 2 seconds)
-        this.bullets = this.bullets.filter(bullet => now - bullet.createdAt < 2000);
+        // Update bullet positions
+        this.bullets.forEach(bullet => {
+            bullet.x += Math.cos(bullet.angle) * bullet.speed * deltaTime;
+            bullet.y += Math.sin(bullet.angle) * bullet.speed * deltaTime;
+        });
         
-        // Check bullet collisions
+        // Remove old bullets (after 3 seconds) or bullets that hit walls
+        this.bullets = this.bullets.filter(bullet => {
+            if (now - bullet.createdAt > 3000) return false;
+            
+            // Check wall collisions
+            for (const wall of this.map.walls) {
+                if (bullet.x >= wall.x && bullet.x <= wall.x + wall.width &&
+                    bullet.y >= wall.y && bullet.y <= wall.y + wall.height) {
+                    return false; // Remove bullet that hit wall
+                }
+            }
+            
+            // Check map boundaries
+            if (bullet.x < 0 || bullet.x > this.map.width ||
+                bullet.y < 0 || bullet.y > this.map.height) {
+                return false;
+            }
+            
+            return true;
+        });
+        
+        // Check bullet-player collisions
+        const bulletsToRemove = [];
         this.bullets.forEach((bullet, bulletIndex) => {
             this.players.forEach((player, playerId) => {
-                if (bullet.owner !== playerId && player.alive) {
+                if (bullet.owner !== playerId && player.alive && !bulletsToRemove.includes(bulletIndex)) {
                     const distance = Math.sqrt(
                         (bullet.x - player.x) ** 2 + (bullet.y - player.y) ** 2
                     );
                     
-                    if (distance < 20) {
+                    if (distance < 25) { // Slightly larger hit radius
                         // Hit!
                         player.health -= bullet.damage;
+                        
+                        // Broadcast hit event
+                        io.to(this.id).emit('playerHit', {
+                            playerId: playerId,
+                            shooterId: bullet.owner,
+                            damage: bullet.damage,
+                            health: player.health,
+                            x: player.x,
+                            y: player.y
+                        });
                         
                         if (player.health <= 0) {
                             player.health = 0;
                             player.alive = false;
+                            player.deaths += 1;
                             
                             // Award points to shooter
                             const shooter = this.players.get(bullet.owner);
                             if (shooter) {
                                 shooter.score += 100;
+                                shooter.kills += 1;
                             }
+                            
+                            // Broadcast kill event
+                            io.to(this.id).emit('playerKilled', {
+                                playerId: playerId,
+                                killerId: bullet.owner,
+                                killerName: shooter ? shooter.name : 'Unknown',
+                                victimName: player.name
+                            });
                         }
                         
-                        // Remove bullet
-                        this.bullets.splice(bulletIndex, 1);
+                        // Mark bullet for removal
+                        bulletsToRemove.push(bulletIndex);
                     }
                 }
             });
+        });
+        
+        // Remove bullets that hit players
+        bulletsToRemove.sort((a, b) => b - a); // Remove from end to start
+        bulletsToRemove.forEach(index => {
+            this.bullets.splice(index, 1);
         });
 
         this.lastUpdate = now;
@@ -674,11 +726,14 @@ io.on('connection', (socket) => {
         const player = room.players.get(socket.id);
         if (!player) return;
 
-        // Respawn player
+        // Get safe spawn point based on team
+        const spawnPoint = room.getSpawnPoint(player.team);
+
+        // Respawn player at safe location
         player.health = player.maxHealth;
         player.alive = true;
-        player.x = 100 + Math.random() * 600;
-        player.y = 100 + Math.random() * 400;
+        player.x = spawnPoint.x;
+        player.y = spawnPoint.y;
         player.weapon.ammo = player.weapon.maxAmmo;
 
         io.to(playerInfo.roomId).emit('playerRespawned', {
