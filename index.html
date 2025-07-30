@@ -132,6 +132,13 @@
     
     <script src="/socket.io/socket.io.js"></script>
     <script src="textures/texture-loader.js"></script>
-    <script src="game.js"></script>
+    
+    <!-- Game modules in dependency order -->
+    <script src="js/game-state.js"></script>
+    <script src="js/entities.js"></script>
+    <script src="js/camera-world.js"></script>
+    <script src="js/multiplayer.js"></script>
+    <script src="js/renderer.js"></script>
+    <script src="js/game-logic.js"></script>
 </body>
 </html>

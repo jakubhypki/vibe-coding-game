@@ -10,6 +10,29 @@ const Game = {
     lastTime: 0,
     deltaTime: 0,
     
+    // Camera system
+    camera: {
+        x: 0,
+        y: 0,
+        targetX: 0,
+        targetY: 0,
+        smoothing: 0.1,
+        bounds: {
+            minX: -2000,
+            maxX: 2000,
+            minY: -2000,
+            maxY: 2000
+        }
+    },
+    
+    // World system for infinite generation
+    world: {
+        chunkSize: 400,
+        loadedChunks: new Map(),
+        generatedChunks: new Set(),
+        loadDistance: 2 // chunks to load around player
+    },
+    
     // Multiplayer
     socket: null,
     isMultiplayer: false,
@@ -30,7 +53,7 @@ const Game = {
     
     // Input handling
     keys: {},
-    mouse: { x: 0, y: 0, clicked: false },
+    mouse: { x: 0, y: 0, clicked: false, worldX: 0, worldY: 0 },
     
     // Game stats
     score: 0,
@@ -109,8 +132,8 @@ class Player {
         this.x = Math.max(this.width/2, Math.min(Game.width - this.width/2, this.x));
         this.y = Math.max(this.height/2, Math.min(Game.height - this.height/2, this.y));
         
-        // Calculate angle to mouse
-        this.angle = Math.atan2(Game.mouse.y - this.y, Game.mouse.x - this.x);
+        // Calculate angle to mouse (using world coordinates)
+        this.angle = Math.atan2(Game.mouse.worldY - this.y, Game.mouse.worldX - this.x);
         
         // Send position update to server if multiplayer
         if (Game.isMultiplayer && Game.socket && !Game.isSpectator) {
@@ -495,32 +518,79 @@ function initMultiplayer() {
     });
     
     Game.socket.on('gameState', (gameState) => {
+        // Update map
+        if (gameState.map) {
+            Game.map = gameState.map;
+        }
+        
         // Update other players
         Game.otherPlayers.clear();
-        gameState.players.forEach(playerData => {
-            if (playerData.id !== Game.socket.id) {
-                const otherPlayer = new Player(playerData.x, playerData.y, false, playerData.team);
-                otherPlayer.health = playerData.health;
-                otherPlayer.alive = playerData.alive;
-                otherPlayer.angle = playerData.angle;
-                otherPlayer.name = playerData.name;
-                otherPlayer.score = playerData.score;
-                Game.otherPlayers.set(playerData.id, otherPlayer);
-            } else {
-                // Update local player from server
-                if (Game.player) {
-                    Game.player.health = playerData.health;
-                    Game.player.alive = playerData.alive;
-                    Game.player.score = playerData.score;
-                    Game.player.weapon.ammo = playerData.weapon.ammo;
-                    Game.player.weapon.reserveAmmo = playerData.weapon.reserveAmmo;
+        if (gameState.players) {
+            gameState.players.forEach(playerData => {
+                if (playerData.id !== Game.socket.id) {
+                    const otherPlayer = new Player(playerData.x, playerData.y, false, playerData.team);
+                    otherPlayer.health = playerData.health;
+                    otherPlayer.alive = playerData.alive;
+                    otherPlayer.angle = playerData.angle;
+                    otherPlayer.name = playerData.name;
+                    otherPlayer.score = playerData.score;
+                    otherPlayer.kills = playerData.kills || 0;
+                    otherPlayer.deaths = playerData.deaths || 0;
+                    if (playerData.weapon) {
+                        otherPlayer.weapon = { ...otherPlayer.weapon, ...playerData.weapon };
+                    }
+                    Game.otherPlayers.set(playerData.id, otherPlayer);
+                } else if (!Game.isSpectator) {
+                    // Update local player from server
+                    if (Game.player) {
+                        Game.player.health = playerData.health;
+                        Game.player.alive = playerData.alive;
+                        Game.player.score = playerData.score;
+                        Game.player.kills = playerData.kills || 0;
+                        Game.player.deaths = playerData.deaths || 0;
+                        Game.player.money = playerData.money || 800;
+                        if (playerData.weapon) {
+                            Game.player.weapon.ammo = playerData.weapon.ammo;
+                            Game.player.weapon.reserveAmmo = playerData.weapon.reserveAmmo;
+                        }
+                    }
                 }
-            }
-        });
+            });
+        }
+        
+        // Update spectators
+        Game.spectators.clear();
+        if (gameState.spectators) {
+            gameState.spectators.forEach(spectatorData => {
+                Game.spectators.set(spectatorData.id, spectatorData);
+            });
+        }
+        
+        // Update round info
+        if (gameState.currentRound !== undefined) {
+            Game.roundInfo.current = gameState.currentRound;
+            Game.roundInfo.ctScore = gameState.ctScore || 0;
+            Game.roundInfo.tScore = gameState.tScore || 0;
+            Game.roundInfo.timeLeft = gameState.roundTimeLeft || 0;
+        }
         
         // Update multiplayer UI
-        document.getElementById('playerCountText').textContent = gameState.players.length;
-        document.getElementById('roomIdText').textContent = gameState.roomId;
+        document.getElementById('playerCountText').textContent = gameState.players ? gameState.players.length : 0;
+        document.getElementById('spectatorCountText').textContent = gameState.spectators ? gameState.spectators.length : 0;
+        document.getElementById('roomIdText').textContent = gameState.roomId || '-';
+        document.getElementById('gameModeText').textContent = gameState.gameMode || 'Unknown';
+        
+        // Update round UI
+        if (gameState.gameMode !== 'deathmatch') {
+            document.getElementById('roundInfo').style.display = 'block';
+            document.getElementById('roundText').textContent = Game.roundInfo.current;
+            document.getElementById('ctScoreText').textContent = Game.roundInfo.ctScore;
+            document.getElementById('tScoreText').textContent = Game.roundInfo.tScore;
+            
+            const minutes = Math.floor(Game.roundInfo.timeLeft / 60000);
+            const seconds = Math.floor((Game.roundInfo.timeLeft % 60000) / 1000);
+            document.getElementById('roundTimeText').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
     });
     
     Game.socket.on('playerUpdate', (data) => {
@@ -576,11 +646,258 @@ function initMultiplayer() {
         }
     });
     
+    Game.socket.on('chatMessage', (data) => {
+        addChatMessage(data);
+    });
+    
     Game.socket.on('joinError', (message) => {
         document.getElementById('connectionStatus').textContent = 'Error: ' + message;
     });
     
     return true;
+}
+
+// Chat system functions
+function addChatMessage(messageData) {
+    const chatMessages = document.getElementById('chatMessages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message ${messageData.type}`;
+    
+    const playerName = document.createElement('span');
+    playerName.className = 'player-name';
+    playerName.textContent = messageData.playerName + ': ';
+    
+    const messageText = document.createElement('span');
+    messageText.className = 'message-text';
+    messageText.textContent = messageData.message;
+    
+    messageDiv.appendChild(playerName);
+    messageDiv.appendChild(messageText);
+    chatMessages.appendChild(messageDiv);
+    
+    // Auto-scroll to bottom
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    // Remove old messages if too many
+    while (chatMessages.children.length > 50) {
+        chatMessages.removeChild(chatMessages.firstChild);
+    }
+}
+
+function sendChatMessage() {
+    const messageInput = document.getElementById('chatMessageInput');
+    const chatType = document.getElementById('chatType').value;
+    const message = messageInput.value.trim();
+    
+    if (message && Game.socket) {
+        Game.socket.emit('chatMessage', {
+            message: message,
+            type: chatType
+        });
+        messageInput.value = '';
+    }
+}
+
+function toggleChat() {
+    const chatContainer = document.getElementById('chatContainer');
+    Game.chatVisible = !Game.chatVisible;
+    chatContainer.style.display = Game.chatVisible ? 'block' : 'none';
+    
+    if (Game.chatVisible) {
+        document.getElementById('chatMessageInput').focus();
+    }
+}
+
+// Camera system functions
+function updateCamera() {
+    if (Game.player && !Game.isSpectator) {
+        // Set camera target to player position
+        Game.camera.targetX = Game.player.x - Game.width / 2;
+        Game.camera.targetY = Game.player.y - Game.height / 2;
+    }
+    
+    // Smooth camera movement
+    Game.camera.x += (Game.camera.targetX - Game.camera.x) * Game.camera.smoothing;
+    Game.camera.y += (Game.camera.targetY - Game.camera.y) * Game.camera.smoothing;
+    
+    // Apply camera bounds
+    Game.camera.x = Math.max(Game.camera.bounds.minX,
+                    Math.min(Game.camera.bounds.maxX - Game.width, Game.camera.x));
+    Game.camera.y = Math.max(Game.camera.bounds.minY,
+                    Math.min(Game.camera.bounds.maxY - Game.height, Game.camera.y));
+}
+
+// Infinite map generation system
+function getChunkKey(chunkX, chunkY) {
+    return `${chunkX},${chunkY}`;
+}
+
+function worldToChunk(worldX, worldY) {
+    return {
+        x: Math.floor(worldX / Game.world.chunkSize),
+        y: Math.floor(worldY / Game.world.chunkSize)
+    };
+}
+
+function generateChunk(chunkX, chunkY) {
+    const chunkKey = getChunkKey(chunkX, chunkY);
+    if (Game.world.generatedChunks.has(chunkKey)) {
+        return Game.world.loadedChunks.get(chunkKey);
+    }
+    
+    const chunk = {
+        x: chunkX,
+        y: chunkY,
+        worldX: chunkX * Game.world.chunkSize,
+        worldY: chunkY * Game.world.chunkSize,
+        walls: [],
+        floors: [],
+        cover: [],
+        enemies: []
+    };
+    
+    // Generate procedural content for this chunk
+    const seed = chunkX * 1000 + chunkY; // Simple seed based on chunk coordinates
+    Math.seedrandom = function(seed) {
+        let m = 0x80000000; // 2**31
+        let a = 1103515245;
+        let c = 12345;
+        let state = seed ? seed : Math.floor(Math.random() * (m - 1));
+        
+        return function() {
+            state = (a * state + c) % m;
+            return state / (m - 1);
+        };
+    };
+    
+    const random = Math.seedrandom(seed);
+    
+    // Generate floor for entire chunk
+    chunk.floors.push({
+        x: chunk.worldX,
+        y: chunk.worldY,
+        width: Game.world.chunkSize,
+        height: Game.world.chunkSize,
+        type: 'floor'
+    });
+    
+    // Generate walls
+    const wallCount = 3 + Math.floor(random() * 5);
+    for (let i = 0; i < wallCount; i++) {
+        const wall = {
+            x: chunk.worldX + random() * (Game.world.chunkSize - 100),
+            y: chunk.worldY + random() * (Game.world.chunkSize - 100),
+            width: 20 + random() * 60,
+            height: 20 + random() * 60,
+            type: 'wall'
+        };
+        chunk.walls.push(wall);
+    }
+    
+    // Generate cover objects
+    const coverCount = 2 + Math.floor(random() * 4);
+    for (let i = 0; i < coverCount; i++) {
+        const cover = {
+            x: chunk.worldX + random() * (Game.world.chunkSize - 50),
+            y: chunk.worldY + random() * (Game.world.chunkSize - 50),
+            width: 30 + random() * 20,
+            height: 30 + random() * 20,
+            type: random() > 0.5 ? 'crate' : 'barrel'
+        };
+        chunk.cover.push(cover);
+    }
+    
+    // Generate enemies for single player
+    if (!Game.isMultiplayer) {
+        const enemyCount = 1 + Math.floor(random() * 3);
+        for (let i = 0; i < enemyCount; i++) {
+            const enemy = new Enemy(
+                chunk.worldX + random() * Game.world.chunkSize,
+                chunk.worldY + random() * Game.world.chunkSize
+            );
+            chunk.enemies.push(enemy);
+        }
+    }
+    
+    Game.world.loadedChunks.set(chunkKey, chunk);
+    Game.world.generatedChunks.add(chunkKey);
+    
+    return chunk;
+}
+
+function updateWorldGeneration() {
+    if (!Game.player) return;
+    
+    const playerChunk = worldToChunk(Game.player.x, Game.player.y);
+    const loadDistance = Game.world.loadDistance;
+    
+    // Generate chunks around player
+    for (let x = playerChunk.x - loadDistance; x <= playerChunk.x + loadDistance; x++) {
+        for (let y = playerChunk.y - loadDistance; y <= playerChunk.y + loadDistance; y++) {
+            generateChunk(x, y);
+        }
+    }
+    
+    // Update camera bounds based on generated world
+    const minChunkX = playerChunk.x - loadDistance;
+    const maxChunkX = playerChunk.x + loadDistance;
+    const minChunkY = playerChunk.y - loadDistance;
+    const maxChunkY = playerChunk.y + loadDistance;
+    
+    Game.camera.bounds.minX = minChunkX * Game.world.chunkSize;
+    Game.camera.bounds.maxX = (maxChunkX + 1) * Game.world.chunkSize;
+    Game.camera.bounds.minY = minChunkY * Game.world.chunkSize;
+    Game.camera.bounds.maxY = (maxChunkY + 1) * Game.world.chunkSize;
+    
+    // Unload distant chunks to save memory
+    const chunksToUnload = [];
+    Game.world.loadedChunks.forEach((chunk, key) => {
+        const distance = Math.max(
+            Math.abs(chunk.x - playerChunk.x),
+            Math.abs(chunk.y - playerChunk.y)
+        );
+        if (distance > loadDistance + 1) {
+            chunksToUnload.push(key);
+        }
+    });
+    
+    chunksToUnload.forEach(key => {
+        const chunk = Game.world.loadedChunks.get(key);
+        // Remove enemies from the main game arrays
+        if (chunk.enemies) {
+            chunk.enemies.forEach(enemy => {
+                const index = Game.enemies.indexOf(enemy);
+                if (index > -1) {
+                    Game.enemies.splice(index, 1);
+                }
+            });
+        }
+        Game.world.loadedChunks.delete(key);
+    });
+    
+    // Add enemies from loaded chunks to main game arrays
+    Game.enemies = [];
+    Game.world.loadedChunks.forEach(chunk => {
+        if (chunk.enemies) {
+            Game.enemies.push(...chunk.enemies);
+        }
+    });
+}
+
+function getAllWalls() {
+    const walls = [];
+    Game.world.loadedChunks.forEach(chunk => {
+        walls.push(...chunk.walls);
+    });
+    return walls;
+}
+
+function getAllCover() {
+    const cover = [];
+    Game.world.loadedChunks.forEach(chunk => {
+        cover.push(...chunk.cover);
+    });
+    return cover;
 }
 
 // Game initialization
@@ -624,6 +941,11 @@ function setupEventListeners() {
     
     // Keyboard events
     document.addEventListener('keydown', (e) => {
+        // Don't process game keys if chat is focused
+        if (document.activeElement === document.getElementById('chatMessageInput')) {
+            return;
+        }
+        
         Game.keys[e.key] = true;
         
         if (e.key === 'Escape') {
@@ -632,6 +954,12 @@ function setupEventListeners() {
             } else if (Game.state === 'paused') {
                 Game.state = 'playing';
             }
+        }
+        
+        // Toggle chat with Enter or T
+        if ((e.key === 'Enter' || e.key === 't' || e.key === 'T') && Game.state === 'playing') {
+            e.preventDefault();
+            toggleChat();
         }
         
         // Respawn in multiplayer
