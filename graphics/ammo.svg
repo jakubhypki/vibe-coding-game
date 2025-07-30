@@ -1,0 +1,12 @@
+<svg width="24" height="24" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <!-- Ammo box -->
+  <rect x="4" y="8" width="16" height="12" fill="#8B4513" stroke="#654321" stroke-width="1"/>
+  <!-- Label -->
+  <rect x="6" y="10" width="12" height="8" fill="#D2691E"/>
+  <!-- Text -->
+  <text x="12" y="15" text-anchor="middle" font-family="Arial" font-size="8" fill="#000">AMMO</text>
+  <!-- Bullets -->
+  <circle cx="8" cy="6" r="1.5" fill="#FFD700"/>
+  <circle cx="12" cy="6" r="1.5" fill="#FFD700"/>
+  <circle cx="16" cy="6" r="1.5" fill="#FFD700"/>
+</svg>

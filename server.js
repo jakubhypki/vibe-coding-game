@@ -12,7 +12,7 @@ const io = socketIo(server, {
     }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 2137;
 
 // Serve static files
 app.use(express.static(path.join(__dirname)));
@@ -27,11 +27,14 @@ class GameRoom {
         this.players = new Map();
         this.spectators = new Map();
         this.bullets = [];
+        this.obstacles = [];
         this.gameState = 'waiting'; // waiting, playing, finished, roundEnd
         this.gameMode = gameMode; // deathmatch, teamdeathmatch, defuse, hostage
         this.maxPlayers = gameMode === 'deathmatch' ? 16 : 10;
         this.maxSpectators = 6;
         this.lastUpdate = Date.now();
+        this.playerColors = ['#0066cc', '#cc6600', '#00cc66', '#cc0066', '#6600cc', '#cccc00', '#00cccc', '#cc6666', '#ff4444', '#44ff44', '#4444ff', '#ffff44', '#ff44ff', '#44ffff'];
+        this.generateObstacles();
         this.map = this.generateMap();
         this.roundTime = gameMode === 'deathmatch' ? 300000 : 120000; // 5min for DM, 2min for others
         this.roundStartTime = null;
@@ -310,6 +313,9 @@ class GameRoom {
             return false;
         }
 
+        const spawnPos = this.getRandomSpawnPosition();
+        const playerIndex = this.players.size;
+
         const team = this.gameMode === 'deathmatch' ? 'dm' :
                     (this.players.size % 2 === 0 ? 'ct' : 't');
         
@@ -317,6 +323,8 @@ class GameRoom {
 
         this.players.set(socketId, {
             id: socketId,
+            x: spawnPos.x,
+            y: spawnPos.y,
             x: spawnPoint.x,
             y: spawnPoint.y,
             angle: 0,
@@ -332,8 +340,11 @@ class GameRoom {
                 lastShot: 0,
                 type: 'ak47'
             },
+            team: playerIndex % 2 === 0 ? 'ct' : 't',
+            color: this.playerColors[Math.floor(Math.random() * this.playerColors.length)],
             team: team,
             alive: true,
+            respawnTimer: 0,
             money: this.gameMode === 'deathmatch' ? 16000 : 800,
             ...playerData
         });
@@ -414,11 +425,18 @@ class GameRoom {
 
     update() {
         const now = Date.now();
+        const deltaTime = (now - this.lastUpdate) / 1000;
         
         // Remove old bullets (after 2 seconds)
         this.bullets = this.bullets.filter(bullet => now - bullet.createdAt < 2000);
         
-        // Check bullet collisions
+        // Update bullet positions
+        this.bullets.forEach(bullet => {
+            bullet.x += Math.cos(bullet.angle) * bullet.speed * deltaTime;
+            bullet.y += Math.sin(bullet.angle) * bullet.speed * deltaTime;
+        });
+        
+        // Check bullet collisions with players
         this.bullets.forEach((bullet, bulletIndex) => {
             this.players.forEach((player, playerId) => {
                 if (bullet.owner !== playerId && player.alive) {
@@ -433,6 +451,7 @@ class GameRoom {
                         if (player.health <= 0) {
                             player.health = 0;
                             player.alive = false;
+                            player.respawnTimer = now + 5000; // 5 seconds respawn timer
                             
                             // Award points to shooter
                             const shooter = this.players.get(bullet.owner);
@@ -448,7 +467,195 @@ class GameRoom {
             });
         });
 
+        // Check bullet collisions with obstacles
+        this.bullets = this.bullets.filter(bullet => {
+            for (const obstacle of this.obstacles) {
+                if (this.bulletHitsObstacle(bullet, obstacle)) {
+                    return false; // Remove bullet
+                }
+            }
+            return true; // Keep bullet
+        });
+
+        // Handle automatic respawning
+        this.players.forEach((player, playerId) => {
+            if (!player.alive && player.respawnTimer > 0 && now >= player.respawnTimer) {
+                this.respawnPlayer(playerId);
+            }
+        });
+
         this.lastUpdate = now;
+    }
+
+    generateObstacles() {
+        this.obstacles = [];
+        
+        // Create structured layouts instead of random placement
+        const structures = [
+            'corner_bunker',
+            'center_pillar',
+            'side_wall',
+            'l_shaped_cover',
+            'double_wall'
+        ];
+        
+        const usedStructures = [];
+        const count = 4 + Math.floor(Math.random() * 2); // 4-5 structures
+        
+        for (let i = 0; i < Math.min(count, structures.length); i++) {
+            let structureType;
+            do {
+                structureType = structures[Math.floor(Math.random() * structures.length)];
+            } while (usedStructures.includes(structureType));
+            
+            usedStructures.push(structureType);
+            this.createStructure(structureType);
+        }
+    }
+
+    createStructure(type) {
+        const centerX = 400;
+        const centerY = 300;
+        
+        switch (type) {
+            case 'corner_bunker':
+                const corner = Math.floor(Math.random() * 4);
+                let bx, by;
+                
+                switch (corner) {
+                    case 0: bx = 80; by = 80; break;
+                    case 1: bx = 620; by = 80; break;
+                    case 2: bx = 80; by = 420; break;
+                    case 3: bx = 620; by = 420; break;
+                }
+                
+                this.obstacles.push({ x: bx, y: by, width: 100, height: 20, type: 'wall' });
+                this.obstacles.push({ x: bx, y: by, width: 20, height: 100, type: 'wall' });
+                this.obstacles.push({ x: bx + 80, y: by + 80, width: 40, height: 40, type: 'box' });
+                break;
+                
+            case 'center_pillar':
+                const cx = centerX - 30 + (Math.random() - 0.5) * 100;
+                const cy = centerY - 30 + (Math.random() - 0.5) * 100;
+                
+                this.obstacles.push({ x: cx, y: cy, width: 60, height: 60, type: 'circle' });
+                this.obstacles.push({ x: cx - 40, y: cy + 20, width: 30, height: 30, type: 'box' });
+                this.obstacles.push({ x: cx + 70, y: cy + 20, width: 30, height: 30, type: 'box' });
+                break;
+                
+            case 'side_wall':
+                const side = Math.floor(Math.random() * 4);
+                let wx, wy, ww, wh;
+                
+                switch (side) {
+                    case 0: wx = 200; wy = 60; ww = 200; wh = 20; break;
+                    case 1: wx = 720; wy = 200; ww = 20; wh = 200; break;
+                    case 2: wx = 400; wy = 520; ww = 200; wh = 20; break;
+                    case 3: wx = 60; wy = 200; ww = 20; wh = 200; break;
+                }
+                
+                this.obstacles.push({ x: wx, y: wy, width: ww, height: wh, type: 'wall' });
+                if (side === 0 || side === 2) {
+                    this.obstacles.push({ x: wx + ww - 40, y: wy - 20, width: 40, height: 60, type: 'box' });
+                } else {
+                    this.obstacles.push({ x: wx - 20, y: wy + wh - 40, width: 60, height: 40, type: 'box' });
+                }
+                break;
+                
+            case 'l_shaped_cover':
+                const lx = 150 + Math.random() * 350;
+                const ly = 150 + Math.random() * 200;
+                
+                this.obstacles.push({ x: lx, y: ly, width: 120, height: 20, type: 'wall' });
+                this.obstacles.push({ x: lx, y: ly, width: 20, height: 120, type: 'wall' });
+                this.obstacles.push({ x: lx + 100, y: ly + 100, width: 40, height: 40, type: 'circle' });
+                break;
+                
+            case 'double_wall':
+                const dwx = 200 + Math.random() * 300;
+                const dwy = 150 + Math.random() * 200;
+                
+                this.obstacles.push({ x: dwx, y: dwy, width: 150, height: 20, type: 'wall' });
+                this.obstacles.push({ x: dwx, y: dwy + 80, width: 150, height: 20, type: 'wall' });
+                this.obstacles.push({ x: dwx + 130, y: dwy + 30, width: 40, height: 40, type: 'box' });
+                break;
+        }
+    }
+
+    obstaclesOverlap(a, b) {
+        return !(a.x + a.width < b.x || b.x + b.width < a.x ||
+                a.y + a.height < b.y || b.y + b.height < a.y);
+    }
+
+    getRandomSpawnPosition() {
+        let attempts = 0;
+        while (attempts < 50) {
+            const x = 100 + Math.random() * 600;
+            const y = 100 + Math.random() * 400;
+            
+            // Check if spawn position is clear of obstacles
+            let clear = true;
+            for (const obstacle of this.obstacles) {
+                const distance = Math.sqrt(
+                    Math.pow(x - (obstacle.x + obstacle.width/2), 2) +
+                    Math.pow(y - (obstacle.y + obstacle.height/2), 2)
+                );
+                if (distance < 60) {
+                    clear = false;
+                    break;
+                }
+            }
+            
+            // Check if spawn position is clear of other players
+            if (clear) {
+                for (const [playerId, player] of this.players) {
+                    const distance = Math.sqrt(
+                        Math.pow(x - player.x, 2) + Math.pow(y - player.y, 2)
+                    );
+                    if (distance < 80) {
+                        clear = false;
+                        break;
+                    }
+                }
+            }
+            
+            if (clear) {
+                return { x, y };
+            }
+            attempts++;
+        }
+        
+        // Fallback to center if no clear position found
+        return { x: 400, y: 300 };
+    }
+
+    bulletHitsObstacle(bullet, obstacle) {
+        switch (obstacle.type) {
+            case 'circle':
+                const centerX = obstacle.x + obstacle.width / 2;
+                const centerY = obstacle.y + obstacle.height / 2;
+                const radius = Math.min(obstacle.width, obstacle.height) / 2;
+                const distance = Math.sqrt(
+                    Math.pow(bullet.x - centerX, 2) + Math.pow(bullet.y - centerY, 2)
+                );
+                return distance <= radius;
+            default: // box, wall
+                return bullet.x >= obstacle.x && bullet.x <= obstacle.x + obstacle.width &&
+                       bullet.y >= obstacle.y && bullet.y <= obstacle.y + obstacle.height;
+        }
+    }
+
+    respawnPlayer(playerId) {
+        const player = this.players.get(playerId);
+        if (!player) return;
+
+        const spawnPos = this.getRandomSpawnPosition();
+        player.health = player.maxHealth;
+        player.alive = true;
+        player.x = spawnPos.x;
+        player.y = spawnPos.y;
+        player.weapon.ammo = player.weapon.maxAmmo;
+        player.respawnTimer = 0;
     }
 
     getGameState() {
@@ -456,6 +663,7 @@ class GameRoom {
             players: Array.from(this.players.values()),
             spectators: Array.from(this.spectators.values()),
             bullets: this.bullets,
+            obstacles: this.obstacles,
             gameState: this.gameState,
             gameMode: this.gameMode,
             roomId: this.id,

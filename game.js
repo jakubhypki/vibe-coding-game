@@ -49,6 +49,8 @@ const Game = {
     enemies: [],
     bullets: [],
     particles: [],
+    obstacles: [],
+    pickups: [],
     map: null,
     
     // Input handling
@@ -115,7 +117,7 @@ class Player {
             dy *= 0.707;
         }
         
-        // Apply movement with collision detection
+        // Apply movement with collision detection with obstacle collision detection
         const moveDistance = this.speed * deltaTime;
         const newX = this.x + dx * moveDistance;
         const newY = this.y + dy * moveDistance;
@@ -129,8 +131,36 @@ class Player {
         }
         
         // Keep player in bounds
-        this.x = Math.max(this.width/2, Math.min(Game.width - this.width/2, this.x));
-        this.y = Math.max(this.height/2, Math.min(Game.height - this.height/2, this.y));
+        let finalX = Math.max(this.width/2, Math.min(Game.width - this.width/2, newX));
+        let finalY = Math.max(this.height/2, Math.min(Game.height - this.height/2, newY));
+        
+        // Check obstacle collisions
+        const tempPlayer = { x: finalX, y: finalY, width: this.width, height: this.height };
+        let collisionX = false, collisionY = false;
+        
+        for (const obstacle of Game.obstacles) {
+            if (obstacle.collidesWith(tempPlayer)) {
+                // Try moving only on X axis
+                const tempPlayerX = { x: finalX, y: this.y, width: this.width, height: this.height };
+                if (obstacle.collidesWith(tempPlayerX)) {
+                    collisionX = true;
+                }
+                
+                // Try moving only on Y axis
+                const tempPlayerY = { x: this.x, y: finalY, width: this.width, height: this.height };
+                if (obstacle.collidesWith(tempPlayerY)) {
+                    collisionY = true;
+                }
+            }
+        }
+        
+        // Apply movement only if no collision
+        if (!collisionX) {
+            this.x = finalX;
+        }
+        if (!collisionY) {
+            this.y = finalY;
+        }
         
         // Calculate angle to mouse (using world coordinates)
         this.angle = Math.atan2(Game.mouse.worldY - this.y, Game.mouse.worldX - this.x);
@@ -283,6 +313,15 @@ class Player {
         ctx.translate(this.x, this.y);
         ctx.rotate(this.angle);
         
+        // Draw player body with custom colors for multiplayer or team colors for single player
+        if (Game.isMultiplayer && this.color) {
+            ctx.fillStyle = this.color;
+        } else if (this.team === 'ct') {
+            ctx.fillStyle = this.isLocal ? '#0066cc' : '#0088ff';
+        } else {
+            ctx.fillStyle = this.isLocal ? '#cc6600' : '#ff8800';
+        }
+        ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
         // Draw player using texture or fallback to colored rectangle
         const textureName = this.team === 'ct' ? 'player_ct' :
                            this.team === 't' ? 'player_t' : 'player_ct';
@@ -369,14 +408,69 @@ class Enemy {
         
         this.angle = Math.atan2(dy, dx);
         
-        // Move towards player if in detection range
-        if (distance < this.detectionRange && distance > 50) {
-            this.x += Math.cos(this.angle) * this.speed * deltaTime;
-            this.y += Math.sin(this.angle) * this.speed * deltaTime;
+        // Check if player is visible (line of sight)
+        const canSeePlayer = distance < this.detectionRange &&
+                           hasLineOfSight(this.x, this.y, Game.player.x, Game.player.y);
+        
+        // Move towards player if in detection range and can see them
+        if (canSeePlayer && distance > 50) {
+            const newX = this.x + Math.cos(this.angle) * this.speed * deltaTime;
+            const newY = this.y + Math.sin(this.angle) * this.speed * deltaTime;
+            
+            // Check obstacle collisions for enemies
+            const tempEnemy = { x: newX, y: newY, width: this.width, height: this.height };
+            let canMoveX = true, canMoveY = true;
+            
+            for (const obstacle of Game.obstacles) {
+                if (obstacle.collidesWith(tempEnemy)) {
+                    // Try moving only on X axis
+                    const tempEnemyX = { x: newX, y: this.y, width: this.width, height: this.height };
+                    if (obstacle.collidesWith(tempEnemyX)) {
+                        canMoveX = false;
+                    }
+                    
+                    // Try moving only on Y axis
+                    const tempEnemyY = { x: this.x, y: newY, width: this.width, height: this.height };
+                    if (obstacle.collidesWith(tempEnemyY)) {
+                        canMoveY = false;
+                    }
+                }
+            }
+            
+            // Apply movement only if no collision
+            if (canMoveX) {
+                this.x = newX;
+            }
+            if (canMoveY) {
+                this.y = newY;
+            }
+            
+            // If enemy is stuck, try to move around obstacle
+            if (!canMoveX && !canMoveY) {
+                // Simple obstacle avoidance - try perpendicular movement
+                const perpAngle = this.angle + Math.PI / 2;
+                const avoidX = this.x + Math.cos(perpAngle) * this.speed * deltaTime * 0.5;
+                const avoidY = this.y + Math.sin(perpAngle) * this.speed * deltaTime * 0.5;
+                
+                const tempAvoid = { x: avoidX, y: avoidY, width: this.width, height: this.height };
+                let canAvoid = true;
+                
+                for (const obstacle of Game.obstacles) {
+                    if (obstacle.collidesWith(tempAvoid)) {
+                        canAvoid = false;
+                        break;
+                    }
+                }
+                
+                if (canAvoid) {
+                    this.x = avoidX;
+                    this.y = avoidY;
+                }
+            }
         }
         
-        // Shoot at player if in range
-        if (distance < this.shootRange && Date.now() - this.lastShot > this.fireRate) {
+        // Shoot at player if in range and can see them
+        if (canSeePlayer && distance < this.shootRange && Date.now() - this.lastShot > this.fireRate) {
             this.shoot();
         }
     }
@@ -449,8 +543,15 @@ class Bullet {
         this.y += Math.sin(this.angle) * moveDistance;
         this.traveled += moveDistance;
         
-        return this.traveled < this.range && 
-               this.x >= 0 && this.x <= Game.width && 
+        // Check collision with obstacles
+        for (const obstacle of Game.obstacles) {
+            if (obstacle.containsPoint(this.x, this.y)) {
+                return false; // Bullet hits obstacle, remove it
+            }
+        }
+        
+        return this.traveled < this.range &&
+               this.x >= 0 && this.x <= Game.width &&
                this.y >= 0 && this.y <= Game.height;
     }
     
@@ -498,6 +599,517 @@ class Particle {
     }
 }
 
+// Obstacle class for procedural obstacles
+class Obstacle {
+    constructor(x, y, width, height, type = 'box') {
+        this.x = x;
+        this.y = y;
+        this.width = width;
+        this.height = height;
+        this.type = type; // 'box', 'circle', 'wall'
+        this.color = '#444';
+        
+        // Different obstacle types have different properties
+        switch (type) {
+            case 'box':
+                this.color = '#666';
+                break;
+            case 'circle':
+                this.radius = Math.min(width, height) / 2;
+                this.color = '#555';
+                break;
+            case 'wall':
+                this.color = '#777';
+                break;
+        }
+    }
+    
+    // Check if a point is inside this obstacle
+    containsPoint(x, y) {
+        switch (this.type) {
+            case 'circle':
+                const dx = x - (this.x + this.width / 2);
+                const dy = y - (this.y + this.height / 2);
+                return Math.sqrt(dx * dx + dy * dy) <= this.radius;
+            default: // box, wall
+                return x >= this.x && x <= this.x + this.width &&
+                       y >= this.y && y <= this.y + this.height;
+        }
+    }
+    
+    // Check collision with a rectangular entity
+    collidesWith(entity) {
+        const entityLeft = entity.x - entity.width / 2;
+        const entityRight = entity.x + entity.width / 2;
+        const entityTop = entity.y - entity.height / 2;
+        const entityBottom = entity.y + entity.height / 2;
+        
+        switch (this.type) {
+            case 'circle':
+                // Circle collision with rectangle
+                const centerX = this.x + this.width / 2;
+                const centerY = this.y + this.height / 2;
+                const closestX = Math.max(entityLeft, Math.min(centerX, entityRight));
+                const closestY = Math.max(entityTop, Math.min(centerY, entityBottom));
+                const dx = centerX - closestX;
+                const dy = centerY - closestY;
+                return (dx * dx + dy * dy) <= (this.radius * this.radius);
+            default: // box, wall
+                return !(entityRight < this.x || entityLeft > this.x + this.width ||
+                        entityBottom < this.y || entityTop > this.y + this.height);
+        }
+    }
+    
+    draw(ctx) {
+        ctx.save();
+        
+        // Use graphics files for obstacles - stretch to fit size
+        switch (this.type) {
+            case 'circle':
+                this.drawCircleObstacle(ctx);
+                break;
+            case 'box':
+                this.drawBoxObstacle(ctx);
+                break;
+            case 'wall':
+                this.drawWallObstacle(ctx);
+                break;
+        }
+        
+        ctx.restore();
+    }
+
+    drawCircleObstacle(ctx) {
+        if (!this.circleImage) {
+            this.circleImage = new Image();
+            this.circleImage.src = 'graphics/obstacle-circle.svg';
+        }
+        
+        if (this.circleImage.complete) {
+            // Create a circular clipping path
+            ctx.beginPath();
+            ctx.arc(this.x + this.width / 2, this.y + this.height / 2, this.radius, 0, Math.PI * 2);
+            ctx.clip();
+            
+            // Draw the image stretched to fit the circle bounds
+            ctx.drawImage(this.circleImage, this.x, this.y, this.width, this.height);
+        } else {
+            // Fallback to solid color
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x + this.width / 2, this.y + this.height / 2, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    drawBoxObstacle(ctx) {
+        if (!this.boxImage) {
+            this.boxImage = new Image();
+            this.boxImage.src = 'graphics/obstacle-square.svg';
+        }
+        
+        if (this.boxImage.complete) {
+            // Draw the image stretched to fit the obstacle size
+            ctx.drawImage(this.boxImage, this.x, this.y, this.width, this.height);
+        } else {
+            // Fallback to solid color
+            ctx.fillStyle = this.color;
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.strokeStyle = '#888';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(this.x, this.y, this.width, this.height);
+        }
+    }
+
+    drawWallObstacle(ctx) {
+        if (!this.wallImage) {
+            this.wallImage = new Image();
+            this.wallImage.src = 'graphics/obstacle-rectangle.svg';
+        }
+        
+        if (this.wallImage.complete) {
+            // Draw the image stretched to fit the obstacle size
+            ctx.drawImage(this.wallImage, this.x, this.y, this.width, this.height);
+        } else {
+            // Fallback to solid color
+            ctx.fillStyle = this.color;
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            ctx.strokeStyle = '#888';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(this.x, this.y, this.width, this.height);
+        }
+    }
+}
+
+// Pickup class for ammo and health items
+class Pickup {
+    constructor(x, y, type) {
+        this.x = x;
+        this.y = y;
+        this.width = 24;
+        this.height = 24;
+        this.type = type; // 'ammo' or 'health'
+        this.collected = false;
+        this.spawnTime = Date.now();
+        this.bobOffset = Math.random() * Math.PI * 2; // For floating animation
+        this.baseY = y;
+        
+        // Different properties for different pickup types
+        switch (type) {
+            case 'ammo':
+                this.color = '#FFD700';
+                this.ammoAmount = 30;
+                this.reserveAmmoAmount = 60;
+                break;
+            case 'health':
+                this.color = '#FF0000';
+                this.healthAmount = 50;
+                break;
+        }
+    }
+    
+    update(deltaTime) {
+        // Floating animation
+        const time = (Date.now() - this.spawnTime) / 1000;
+        this.y = this.baseY + Math.sin(time * 2 + this.bobOffset) * 3;
+        
+        // Check collision with player
+        if (Game.player && !this.collected) {
+            const dx = Game.player.x - this.x;
+            const dy = Game.player.y - this.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance < 20) {
+                this.collect();
+                return false; // Remove pickup
+            }
+        }
+        
+        return true; // Keep pickup
+    }
+    
+    collect() {
+        if (this.collected) return;
+        
+        this.collected = true;
+        
+        switch (this.type) {
+            case 'ammo':
+                if (Game.player.weapon.ammo < Game.player.weapon.maxAmmo ||
+                    Game.player.weapon.reserveAmmo < 270) {
+                    Game.player.weapon.reserveAmmo = Math.min(270,
+                        Game.player.weapon.reserveAmmo + this.reserveAmmoAmount);
+                    
+                    // Create pickup effect particles
+                    for (let i = 0; i < 8; i++) {
+                        const particle = new Particle(
+                            this.x,
+                            this.y,
+                            Math.random() * Math.PI * 2,
+                            50 + Math.random() * 100,
+                            '#FFD700',
+                            300
+                        );
+                        Game.particles.push(particle);
+                    }
+                }
+                break;
+                
+            case 'health':
+                if (Game.player.health < Game.player.maxHealth) {
+                    Game.player.health = Math.min(Game.player.maxHealth,
+                        Game.player.health + this.healthAmount);
+                    
+                    // Create pickup effect particles
+                    for (let i = 0; i < 8; i++) {
+                        const particle = new Particle(
+                            this.x,
+                            this.y,
+                            Math.random() * Math.PI * 2,
+                            50 + Math.random() * 100,
+                            '#00FF00',
+                            300
+                        );
+                        Game.particles.push(particle);
+                    }
+                }
+                break;
+        }
+    }
+    
+    draw(ctx) {
+        if (this.collected) return;
+        
+        ctx.save();
+        
+        // Draw pickup with pulsing effect
+        const time = (Date.now() - this.spawnTime) / 1000;
+        const pulse = 0.8 + Math.sin(time * 4) * 0.2;
+        
+        ctx.translate(this.x, this.y);
+        ctx.scale(pulse, pulse);
+        
+        // Draw pickup based on type
+        switch (this.type) {
+            case 'ammo':
+                // Ammo box
+                ctx.fillStyle = '#8B4513';
+                ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+                ctx.strokeStyle = '#654321';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(-this.width/2, -this.height/2, this.width, this.height);
+                
+                // Label
+                ctx.fillStyle = '#D2691E';
+                ctx.fillRect(-this.width/2 + 2, -this.height/2 + 2, this.width - 4, this.height - 4);
+                
+                // Text
+                ctx.fillStyle = '#000';
+                ctx.font = '8px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('AMMO', 0, 2);
+                
+                // Bullets
+                ctx.fillStyle = '#FFD700';
+                ctx.beginPath();
+                ctx.arc(-6, -8, 2, 0, Math.PI * 2);
+                ctx.arc(0, -8, 2, 0, Math.PI * 2);
+                ctx.arc(6, -8, 2, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'health':
+                // Health kit background
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(-this.width/2, -this.height/2, this.width, this.height);
+                ctx.strokeStyle = '#CCCCCC';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(-this.width/2, -this.height/2, this.width, this.height);
+                
+                // Red cross
+                ctx.fillStyle = '#FF0000';
+                ctx.fillRect(-2, -8, 4, 16); // Vertical
+                ctx.fillRect(-8, -2, 16, 4); // Horizontal
+                break;
+        }
+        
+        ctx.restore();
+    }
+}
+
+// Line of sight checking function
+function hasLineOfSight(x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    const steps = Math.ceil(distance / 5); // Check every 5 pixels
+    
+    for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const checkX = x1 + dx * t;
+        const checkY = y1 + dy * t;
+        
+        // Check if this point intersects with any obstacle
+        for (const obstacle of Game.obstacles) {
+            if (obstacle.containsPoint(checkX, checkY)) {
+                return false; // Line of sight blocked
+            }
+        }
+    }
+    
+    return true; // Clear line of sight
+}
+
+// Function to generate structured obstacles
+function generateObstacles(count = 5) {
+    Game.obstacles = [];
+    
+    // Create structured layouts instead of random placement
+    const structures = [
+        'corner_bunker',
+        'center_pillar',
+        'side_wall',
+        'l_shaped_cover',
+        'double_wall'
+    ];
+    
+    const usedStructures = [];
+    
+    for (let i = 0; i < Math.min(count, structures.length); i++) {
+        let structureType;
+        do {
+            structureType = structures[Math.floor(Math.random() * structures.length)];
+        } while (usedStructures.includes(structureType));
+        
+        usedStructures.push(structureType);
+        createStructure(structureType);
+    }
+}
+
+// Create specific structured obstacles
+function createStructure(type) {
+    const playerX = Game.player ? Game.player.x : Game.width / 2;
+    const playerY = Game.player ? Game.player.y : Game.height / 2;
+    
+    switch (type) {
+        case 'corner_bunker':
+            // Create a corner bunker structure
+            const corner = Math.floor(Math.random() * 4); // 0=top-left, 1=top-right, 2=bottom-left, 3=bottom-right
+            let bx, by;
+            
+            switch (corner) {
+                case 0: bx = 80; by = 80; break;
+                case 1: bx = Game.width - 180; by = 80; break;
+                case 2: bx = 80; by = Game.height - 180; break;
+                case 3: bx = Game.width - 180; by = Game.height - 180; break;
+            }
+            
+            if (Math.sqrt((bx - playerX) ** 2 + (by - playerY) ** 2) > 120) {
+                Game.obstacles.push(new Obstacle(bx, by, 100, 20, 'wall')); // Horizontal wall
+                Game.obstacles.push(new Obstacle(bx, by, 20, 100, 'wall')); // Vertical wall
+                Game.obstacles.push(new Obstacle(bx + 80, by + 80, 40, 40, 'box')); // Corner box
+            }
+            break;
+            
+        case 'center_pillar':
+            // Create a central pillar structure
+            const cx = Game.width / 2 - 30 + (Math.random() - 0.5) * 100;
+            const cy = Game.height / 2 - 30 + (Math.random() - 0.5) * 100;
+            
+            if (Math.sqrt((cx - playerX) ** 2 + (cy - playerY) ** 2) > 100) {
+                Game.obstacles.push(new Obstacle(cx, cy, 60, 60, 'circle')); // Central pillar
+                // Add small cover boxes around it
+                Game.obstacles.push(new Obstacle(cx - 40, cy + 20, 30, 30, 'box'));
+                Game.obstacles.push(new Obstacle(cx + 70, cy + 20, 30, 30, 'box'));
+            }
+            break;
+            
+        case 'side_wall':
+            // Create a side wall structure
+            const side = Math.floor(Math.random() * 4); // 0=top, 1=right, 2=bottom, 3=left
+            let wx, wy, ww, wh;
+            
+            switch (side) {
+                case 0: wx = 200; wy = 60; ww = 200; wh = 20; break;
+                case 1: wx = Game.width - 80; wy = 200; ww = 20; wh = 200; break;
+                case 2: wx = 400; wy = Game.height - 80; ww = 200; wh = 20; break;
+                case 3: wx = 60; wy = 200; ww = 20; wh = 200; break;
+            }
+            
+            if (Math.sqrt((wx + ww/2 - playerX) ** 2 + (wy + wh/2 - playerY) ** 2) > 120) {
+                Game.obstacles.push(new Obstacle(wx, wy, ww, wh, 'wall'));
+                // Add a small bunker at one end
+                if (side === 0 || side === 2) {
+                    Game.obstacles.push(new Obstacle(wx + ww - 40, wy - 20, 40, 60, 'box'));
+                } else {
+                    Game.obstacles.push(new Obstacle(wx - 20, wy + wh - 40, 60, 40, 'box'));
+                }
+            }
+            break;
+            
+        case 'l_shaped_cover':
+            // Create an L-shaped cover structure
+            const lx = 150 + Math.random() * (Game.width - 350);
+            const ly = 150 + Math.random() * (Game.height - 350);
+            
+            if (Math.sqrt((lx - playerX) ** 2 + (ly - playerY) ** 2) > 100) {
+                Game.obstacles.push(new Obstacle(lx, ly, 120, 20, 'wall')); // Horizontal part
+                Game.obstacles.push(new Obstacle(lx, ly, 20, 120, 'wall')); // Vertical part
+                Game.obstacles.push(new Obstacle(lx + 100, ly + 100, 40, 40, 'circle')); // Corner reinforcement
+            }
+            break;
+            
+        case 'double_wall':
+            // Create parallel walls with gap
+            const dwx = 200 + Math.random() * (Game.width - 500);
+            const dwy = 150 + Math.random() * (Game.height - 300);
+            
+            if (Math.sqrt((dwx - playerX) ** 2 + (dwy - playerY) ** 2) > 120) {
+                Game.obstacles.push(new Obstacle(dwx, dwy, 150, 20, 'wall')); // First wall
+                Game.obstacles.push(new Obstacle(dwx, dwy + 80, 150, 20, 'wall')); // Second wall
+                Game.obstacles.push(new Obstacle(dwx + 130, dwy + 30, 40, 40, 'box')); // End cover
+            }
+            break;
+    }
+}
+
+// Simple path blocking check - ensures obstacles don't completely block movement
+function blocksPath(obstacle) {
+    // Check if obstacle blocks the center area too much
+    const centerX = Game.width / 2;
+    const centerY = Game.height / 2;
+    const obstacleCenter = {
+        x: obstacle.x + obstacle.width / 2,
+        y: obstacle.y + obstacle.height / 2
+    };
+    
+    // Don't place large obstacles in the center area
+    if (Math.abs(obstacleCenter.x - centerX) < 100 &&
+        Math.abs(obstacleCenter.y - centerY) < 100 &&
+        (obstacle.width > 60 || obstacle.height > 60)) {
+        return true;
+    }
+    
+    // Don't place obstacles that span too much of the screen
+    if (obstacle.width > Game.width * 0.3 || obstacle.height > Game.height * 0.3) {
+        return true;
+    }
+    
+    return false;
+}
+
+// Function to spawn pickups randomly on the map
+function spawnPickup() {
+    const types = ['ammo', 'health'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    
+    let x, y;
+    let attempts = 0;
+    const maxAttempts = 50;
+    
+    // Find a valid spawn position
+    do {
+        x = 50 + Math.random() * (Game.width - 100);
+        y = 50 + Math.random() * (Game.height - 100);
+        attempts++;
+        
+        // Check if position is clear of obstacles and player
+        let validPosition = true;
+        
+        // Check distance from player
+        if (Game.player) {
+            const playerDistance = Math.sqrt(
+                Math.pow(Game.player.x - x, 2) + Math.pow(Game.player.y - y, 2)
+            );
+            if (playerDistance < 80) {
+                validPosition = false;
+            }
+        }
+        
+        // Check obstacles
+        if (validPosition) {
+            const pickupRect = { x: x, y: y, width: 24, height: 24 };
+            for (const obstacle of Game.obstacles) {
+                if (obstacle.collidesWith(pickupRect)) {
+                    validPosition = false;
+                    break;
+                }
+            }
+        }
+        
+        if (validPosition) {
+            const pickup = new Pickup(x, y, type);
+            Game.pickups.push(pickup);
+            break;
+        }
+        
+    } while (attempts < maxAttempts);
+}
+
+// Pickup spawning timer
+let lastPickupSpawn = 0;
+const pickupSpawnInterval = 15000; // 15 seconds
+
 // Multiplayer functions
 function initMultiplayer() {
     if (typeof io === 'undefined') {
@@ -539,7 +1151,8 @@ function initMultiplayer() {
                     if (playerData.weapon) {
                         otherPlayer.weapon = { ...otherPlayer.weapon, ...playerData.weapon };
                     }
-                    Game.otherPlayers.set(playerData.id, otherPlayer);
+                    otherPlayer.color = playerData.color;
+                Game.otherPlayers.set(playerData.id, otherPlayer);
                 } else if (!Game.isSpectator) {
                     // Update local player from server
                     if (Game.player) {
@@ -550,7 +1163,8 @@ function initMultiplayer() {
                         Game.player.deaths = playerData.deaths || 0;
                         Game.player.money = playerData.money || 800;
                         if (playerData.weapon) {
-                            Game.player.weapon.ammo = playerData.weapon.ammo;
+                            Game.player.color = playerData.color;
+                    Game.player.weapon.ammo = playerData.weapon.ammo;
                             Game.player.weapon.reserveAmmo = playerData.weapon.reserveAmmo;
                         }
                     }
@@ -572,6 +1186,14 @@ function initMultiplayer() {
             Game.roundInfo.ctScore = gameState.ctScore || 0;
             Game.roundInfo.tScore = gameState.tScore || 0;
             Game.roundInfo.timeLeft = gameState.roundTimeLeft || 0;
+        }
+        
+        // Update obstacles from server
+        if (gameState.obstacles) {
+            Game.obstacles = gameState.obstacles.map(obstacleData => {
+                const obstacle = new Obstacle(obstacleData.x, obstacleData.y, obstacleData.width, obstacleData.height, obstacleData.type);
+                return obstacle;
+            });
         }
         
         // Update multiplayer UI
@@ -956,16 +1578,7 @@ function setupEventListeners() {
             }
         }
         
-        // Toggle chat with Enter or T
-        if ((e.key === 'Enter' || e.key === 't' || e.key === 'T') && Game.state === 'playing') {
-            e.preventDefault();
-            toggleChat();
-        }
-        
-        // Respawn in multiplayer
-        if (e.key === ' ' && Game.isMultiplayer && Game.player && !Game.player.alive) {
-            Game.player.respawn();
-        }
+        // Remove manual respawn - now automatic after 5 seconds
     });
     
     document.addEventListener('keyup', (e) => {
@@ -1012,6 +1625,11 @@ function startSinglePlayerGame() {
     Game.enemies = [];
     Game.bullets = [];
     Game.particles = [];
+    Game.obstacles = [];
+    Game.pickups = [];
+    
+    // Generate initial obstacles
+    generateObstacles(4 + Math.floor(Game.level / 2));
     
     // Spawn initial enemies
     spawnEnemies(3);
@@ -1049,6 +1667,8 @@ function startMultiplayerGame() {
     Game.enemies = [];
     Game.bullets = [];
     Game.particles = [];
+    Game.obstacles = [];
+    Game.pickups = [];
     
     // Join multiplayer room
     Game.socket.emit('joinRoom', {
@@ -1168,9 +1788,26 @@ function update(deltaTime) {
     // Update particles
     Game.particles = Game.particles.filter(particle => particle.update(deltaTime));
     
+    // Update pickups (single player only)
+    if (!Game.isMultiplayer) {
+        Game.pickups = Game.pickups.filter(pickup => pickup.update(deltaTime));
+        
+        // Spawn pickups periodically
+        if (Date.now() - lastPickupSpawn > pickupSpawnInterval) {
+            if (Game.pickups.length < 3) { // Maximum 3 pickups on map
+                spawnPickup();
+                lastPickupSpawn = Date.now();
+            }
+        }
+    }
+    
     // Spawn more enemies if all are dead (single player only)
     if (!Game.isMultiplayer && Game.enemies.length === 0) {
         Game.level++;
+        
+        // Generate new obstacles for the new level
+        generateObstacles(4 + Math.floor(Game.level / 2));
+        
         spawnEnemies(2 + Game.level);
     }
     
@@ -1206,6 +1843,8 @@ function render() {
     }
     
     // Draw game objects
+    Game.obstacles.forEach(obstacle => obstacle.draw(ctx));
+    Game.pickups.forEach(pickup => pickup.draw(ctx));
     Game.particles.forEach(particle => particle.draw(ctx));
     Game.bullets.forEach(bullet => bullet.draw(ctx));
     
@@ -1242,7 +1881,7 @@ function render() {
         ctx.fillStyle = '#fff';
         ctx.font = '24px Arial';
         ctx.textAlign = 'center';
-        ctx.fillText('You are dead! Press SPACE to respawn', Game.width / 2, Game.height / 2);
+        ctx.fillText('You are dead! Respawning in 5 seconds...', Game.width / 2, Game.height / 2);
     }
 }
 
