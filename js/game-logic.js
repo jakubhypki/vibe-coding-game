@@ -3,6 +3,12 @@ function init() {
     Game.canvas = document.getElementById('gameCanvas');
     Game.ctx = Game.canvas.getContext('2d');
     
+    // Initialize audio system
+    if (typeof AudioManager !== 'undefined') {
+        Game.audioManager = new AudioManager();
+        console.log('Audio system initialized');
+    }
+    
     // Initialize texture system
     initializeTextures();
     
@@ -231,6 +237,12 @@ function startSinglePlayerGame() {
     Game.level = 1;
     Game.enemiesKilled = 0;
     
+    // Play round start sound and music
+    if (Game.audioManager) {
+        Game.audioManager.playSound('round_start');
+        Game.audioManager.playMusic('round_music');
+    }
+    
     // Reset world generation
     Game.world.loadedChunks.clear();
     Game.world.generatedChunks.clear();
@@ -293,6 +305,12 @@ function startMultiplayerGame() {
     Game.gameMode = gameMode;
     Game.score = 0;
     
+    // Play round start sound and music
+    if (Game.audioManager) {
+        Game.audioManager.playSound('round_start');
+        Game.audioManager.playMusic('round_music');
+    }
+    
     // Initialize local player only if not spectator
     if (!asSpectator) {
         const safeSpawn = findSafeSpawnPosition(0, 0, 300);
@@ -341,6 +359,12 @@ function showMenu() {
     }
     Game.isMultiplayer = false;
     Game.isSpectator = false;
+    
+    // Play menu music
+    if (Game.audioManager) {
+        Game.audioManager.playMusic('menu_theme');
+    }
+    
     showScreen('gameMenu');
 }
 

@@ -425,10 +425,7 @@ class GameRoom {
 
     update() {
         const now = Date.now();
-        const deltaTime = (now - this.lastUpdate) / 1000;
-        
-        // Remove old bullets (after 2 seconds)
-        this.bullets = this.bullets.filter(bullet => now - bullet.createdAt < 2000);
+        const deltaTime = (now - this.lastUpdate) / 1000; // Convert to seconds
         
         // Update bullet positions
         this.bullets.forEach(bullet => {
@@ -436,52 +433,75 @@ class GameRoom {
             bullet.y += Math.sin(bullet.angle) * bullet.speed * deltaTime;
         });
         
-        // Check bullet collisions with players
+        // Remove old bullets (after 3 seconds) or bullets that hit walls
+        this.bullets = this.bullets.filter(bullet => {
+            if (now - bullet.createdAt > 3000) return false;
+            
+            // Check wall collisions
+            for (const wall of this.map.walls) {
+                if (bullet.x >= wall.x && bullet.x <= wall.x + wall.width &&
+                    bullet.y >= wall.y && bullet.y <= wall.y + wall.height) {
+                    return false; // Remove bullet that hit wall
+                }
+            }
+            
+            // Check map boundaries
+            if (bullet.x < 0 || bullet.x > this.map.width ||
+                bullet.y < 0 || bullet.y > this.map.height) {
+                return false;
+            }
+            
+            return true;
+        });
+        
+        // Check bullet-player collisions
+        const bulletsToRemove = [];
         this.bullets.forEach((bullet, bulletIndex) => {
             this.players.forEach((player, playerId) => {
-                if (bullet.owner !== playerId && player.alive) {
+                if (bullet.owner !== playerId && player.alive && !bulletsToRemove.includes(bulletIndex)) {
                     const distance = Math.sqrt(
                         (bullet.x - player.x) ** 2 + (bullet.y - player.y) ** 2
                     );
                     
-                    if (distance < 20) {
+                    if (distance < 25) { // Slightly larger hit radius
                         // Hit!
                         player.health -= bullet.damage;
+                        
+                        // Broadcast hit event
+                        io.to(this.id).emit('playerHit', {
+                            playerId: playerId,
+                            shooterId: bullet.owner,
+                            damage: bullet.damage,
+                            health: player.health,
+                            x: player.x,
+                            y: player.y
+                        });
                         
                         if (player.health <= 0) {
                             player.health = 0;
                             player.alive = false;
-                            player.respawnTimer = now + 5000; // 5 seconds respawn timer
                             
                             // Award points to shooter
                             const shooter = this.players.get(bullet.owner);
                             if (shooter) {
                                 shooter.score += 100;
+                                shooter.kills += 1;
                             }
+                            
+                            // Broadcast kill event
+                            io.to(this.id).emit('playerKilled', {
+                                playerId: playerId,
+                                killerId: bullet.owner,
+                                killerName: shooter ? shooter.name : 'Unknown',
+                                victimName: player.name
+                            });
                         }
                         
-                        // Remove bullet
-                        this.bullets.splice(bulletIndex, 1);
+                        // Mark bullet for removal
+                        bulletsToRemove.push(bulletIndex);
                     }
                 }
             });
-        });
-
-        // Check bullet collisions with obstacles
-        this.bullets = this.bullets.filter(bullet => {
-            for (const obstacle of this.obstacles) {
-                if (this.bulletHitsObstacle(bullet, obstacle)) {
-                    return false; // Remove bullet
-                }
-            }
-            return true; // Keep bullet
-        });
-
-        // Handle automatic respawning
-        this.players.forEach((player, playerId) => {
-            if (!player.alive && player.respawnTimer > 0 && now >= player.respawnTimer) {
-                this.respawnPlayer(playerId);
-            }
         });
 
         this.lastUpdate = now;
@@ -882,11 +902,14 @@ io.on('connection', (socket) => {
         const player = room.players.get(socket.id);
         if (!player) return;
 
-        // Respawn player
+        // Get safe spawn point based on team
+        const spawnPoint = room.getSpawnPoint(player.team);
+
+        // Respawn player at safe location
         player.health = player.maxHealth;
         player.alive = true;
-        player.x = 100 + Math.random() * 600;
-        player.y = 100 + Math.random() * 400;
+        player.x = spawnPoint.x;
+        player.y = spawnPoint.y;
         player.weapon.ammo = player.weapon.maxAmmo;
 
         io.to(playerInfo.roomId).emit('playerRespawned', {
